@@ -1,0 +1,94 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+
+# ----------------------------------------------------
+# 基础属性保留
+# ----------------------------------------------------
+-keepattributes EnclosingMethod,InnerClasses,Signature,SourceFile,LineNumberTable,*Annotation*
+-keepattributes RuntimeVisibleAnnotations,RuntimeVisibleParameterAnnotations,RuntimeVisibleTypeAnnotations
+
+# ----------------------------------------------------
+# Kotlinx Serialization & Data Models
+# ----------------------------------------------------
+# 只保留带有 @Serializable 注解的类及其成员
+-keep @kotlinx.serialization.Serializable class * { *; }
+-keepclassmembers class * {
+    *** Companion;
+    *** serializer(...);
+}
+# 精确保留业务数据类
+-keep class com.ai.wangcai.data.** {
+    <fields>;
+    <init>(...);
+}
+
+# ----------------------------------------------------
+# Ktor & Vico (移除过宽规则)
+# ----------------------------------------------------
+# 现代 AAR 库通常自带混淆规则，不再手动全量保留。
+# 如果运行时发现 Ktor 或 Vico 崩溃，再根据报错精准添加。
+-dontwarn io.ktor.**
+-keep class kotlinx.coroutines.debug.** { *; }
+
+# ----------------------------------------------------
+# Apache POI (Excel) 精细化保留
+# ----------------------------------------------------
+# 仅保留 POI 导出 Excel 必须的核心接口和类
+-keep class org.apache.poi.xssf.usermodel.XSSFWorkbook { *; }
+-keep class org.apache.poi.xssf.usermodel.XSSFSheet { *; }
+-keep class org.apache.poi.xssf.usermodel.XSSFRow { *; }
+-keep class org.apache.poi.xssf.usermodel.XSSFCell { *; }
+
+# 精准保留 ss.usermodel 接口（解决过宽规则警告）
+-keep class org.apache.poi.ss.usermodel.Workbook { <methods>; }
+-keep class org.apache.poi.ss.usermodel.Sheet { <methods>; }
+-keep class org.apache.poi.ss.usermodel.Row { <methods>; }
+-keep class org.apache.poi.ss.usermodel.Cell { <methods>; }
+-keep class org.apache.poi.ss.usermodel.CellValue { <methods>; }
+-keep class org.apache.poi.ss.usermodel.FormulaEvaluator { <methods>; }
+
+# 保留 XMLBeans 必要的本地化与加载器
+-keep class org.apache.xmlbeans.impl.store.Locale { *; }
+-keep class * implements org.apache.poi.extractor.ExtractorProvider
+-keep class * implements org.apache.xmlbeans.SchemaTypeLoader
+-keep class * implements org.apache.xmlbeans.impl.store.Locale$LoadContext
+
+# 解决类型检查警告
+-dontwarn org.apache.poi.xslf.draw.**
+-dontwarn org.apache.poi.sl.draw.**
+-dontwarn org.apache.poi.sl.draw.geom.**
+
+# 屏蔽 Android 缺失的桌面端依赖警告
+-dontwarn com.github.javaparser.**
+-dontwarn com.microsoft.schemas.**
+-dontwarn de.rototor.pdfbox.**
+-dontwarn javax.xml.crypto.**
+-dontwarn javax.swing.**
+-dontwarn com.sun.org.apache.xml.internal.resolver.**
+-dontwarn org.apache.jcp.xml.dsig.internal.dom.**
+-dontwarn org.apache.pdfbox.**
+-dontwarn java.awt.**
+-dontwarn javax.imageio.**
+-dontwarn javax.xml.stream.**
+-dontwarn net.sf.saxon.**
+-dontwarn org.osgi.framework.**
+-dontwarn aQute.bnd.**
+-dontwarn org.apache.logging.log4j.**
+-dontwarn com.github.luben.zstd.**
+-dontwarn org.apache.commons.compress.**
+-dontwarn org.apache.batik.**
+-dontwarn org.apache.maven.**
+-dontwarn org.apache.tools.ant.**
+-dontwarn org.apache.xml.security.**
+-dontwarn org.ietf.jgss.**
+-dontwarn org.openxmlformats.schemas.**
+-dontwarn org.w3c.dom.events.**
+-dontwarn org.w3c.dom.svg.**
+-dontwarn org.w3c.dom.traversal.**
+
+# ----------------------------------------------------
+# Room & SQLite
+# ----------------------------------------------------
+-keep class * extends androidx.room.RoomDatabase
+-dontwarn androidx.room.paging.**
+-keep class com.ai.wangcai.data.PetDao { <methods>; }

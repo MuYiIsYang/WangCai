@@ -1,0 +1,25 @@
+*.iml
+.gradle
+/local.properties
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+# IDE files
+.idea/
+
+# Android outputs
+*.apk
+*.aar
+*.ap_
+/app/debug/
+/app/release/
+
+# Logs
+*.log
+hs_err_pid*
+replay_pid*
+
+# AI Artifacts
+.artifacts/
