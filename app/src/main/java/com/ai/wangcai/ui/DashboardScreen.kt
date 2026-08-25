@@ -248,53 +248,57 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
         }
 
         // --- 账户菜单 (从 MonthCalendarView 移至此处，解决 z-index 遮挡问题) ---
-        AnimatedVisibility(
-            visible = showAccountMenu,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
-            modifier = Modifier
-                .padding(top = 54.dp, end = 24.dp) // 适配全局坐标
-                .align(Alignment.TopEnd)
+        Box(
+            modifier = if (isLandscape) Modifier.fillMaxWidth(0.6f).fillMaxHeight() else Modifier.fillMaxSize()
         ) {
-            val config by viewModel.supabaseConfig.collectAsState()
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            AnimatedVisibility(
+                visible = showAccountMenu,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+                modifier = Modifier
+                    .padding(top = 54.dp, end = if (isLandscape) 16.dp else 24.dp) // 适配全局坐标
+                    .align(Alignment.TopEnd)
             ) {
-                AvatarMenuItem(
-                    label = if (config.isValid) "仓库信息" else "配置仓库",
-                    icon = {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.Cloud, 
-                                null, 
-                                tint = if (config.isValid) DeepGreen else Color.Gray,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Icon(
-                                imageVector = if (config.isValid) Icons.Default.Check else Icons.Default.Close,
-                                null,
-                                tint = if (config.isValid) Color.Green else Color.Red,
-                                modifier = Modifier.size(10.dp).align(Alignment.BottomEnd).background(Color.White, CircleShape)
-                            )
+                val config by viewModel.supabaseConfig.collectAsState()
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    AvatarMenuItem(
+                        label = if (config.isValid) "仓库信息" else "配置仓库",
+                        icon = {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Cloud, 
+                                    null, 
+                                    tint = if (config.isValid) DeepGreen else Color.Gray,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Icon(
+                                    imageVector = if (config.isValid) Icons.Default.Check else Icons.Default.Close,
+                                    null,
+                                    tint = if (config.isValid) Color.Green else Color.Red,
+                                    modifier = Modifier.size(10.dp).align(Alignment.BottomEnd).background(Color.White, CircleShape)
+                                )
+                            }
+                        },
+                        onClick = { 
+                            showAccountMenu = false
+                            onSupabaseConfigClick() 
                         }
-                    },
-                    onClick = { 
-                        showAccountMenu = false
-                        onSupabaseConfigClick() 
-                    }
-                )
+                    )
 
-                AvatarMenuItem(
-                    label = "导入导出",
-                    icon = {
-                        Icon(Icons.Default.Share, null, tint = DeepGreen, modifier = Modifier.size(20.dp))
-                    },
-                    onClick = { 
-                        showAccountMenu = false
-                        showBackupDialog = true
-                    }
-                )
+                    AvatarMenuItem(
+                        label = "导入导出",
+                        icon = {
+                            Icon(Icons.Default.Share, null, tint = DeepGreen, modifier = Modifier.size(20.dp))
+                        },
+                        onClick = { 
+                            showAccountMenu = false
+                            showBackupDialog = true
+                        }
+                    )
+                }
             }
         }
 
