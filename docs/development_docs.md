@@ -1,72 +1,70 @@
-# 旺财 (WangCai) 宠物健康管理系统 - 完整开发与维护指南
+# 旺财 (WangCai) 开发者技术手册
 
-本文件整合了软件的功能概述、技术架构、核心逻辑、文件索引及详细函数说明，是项目的唯一权威技术文档。
-
----
-
-## 一、 项目概述
-“旺财”是一款专为宠物设计的健康数据管理应用。核心功能是帮助宠物主通过精准的“插值计算”追踪宠物的饮食摄入量，并提供体重、用药、排泄、零食等多维度的健康趋势分析。
-
-### 核心技术栈与版本 (V2.9 更新)
-- **UI 框架**: Jetpack Compose (BOM: 2026.08.00, Material 3)
-- **开发语言**: Kotlin 2.4.10 (K2 编译器)
-- **构建工具**: AGP 9.3.2 / KSP 2.3.11 / Gradle 9.7.1
-- **架构模式**: MVVM (Model-View-ViewModel + Flow)
-- **数据持久层**: Room 2.8.4 (当前数据库版本: 16)
-- **网络与云端**: Ktor 3.5.2 / kotlinx.serialization 1.11.0
-- **数据可视化**: Vico Charts 3.3.0
-- **数据导出**: Apache POI 5.5.1
-- **后台任务**: WorkManager 2.11.2
+本文档为“旺财”项目提供详尽的文件索引、架构说明及布局设计逻辑，旨在帮助开发者快速理解系统各模块的协作方式。
 
 ---
 
-## 二、 页面功能详解
+## 一、 文件系统索引与职责说明
 
-### 1. 启动页 (SplashView)
-- **功能**: 展示品牌 Logo 和名称。
-- **逻辑**: 在 `MainActivity` 中通过 `LaunchedEffect` 实现 0.5 秒的固定停留，随后切换到主界面。
+### 1. 核心控制层 (Entry Points)
+- [**MainActivity.kt**](file:///app/src/main/java/com/ai/wangcai/MainActivity.kt)
+    - **职责**：应用入口，初始化边缘到边缘 (Edge-to-Edge) 布局，配置 WorkManager 自动备份。
+    - **逻辑**：管理全局弹窗状态（如 Supabase 配置弹窗），通过 `Configuration` 监听设备旋转并决定导航模式（底部栏 vs 侧边栏）。
 
-### 2. 首页仪表盘 (DashboardScreen)
-这是应用的核心交互页面，采用响应式布局。
-- **日历组件**: 手写网格逻辑，固定“周日”为首列。支持 3:2 比例适配。
-- **用户悬浮菜单 (Avatar Menu)**: 点击右上角头像弹出 FAB 风格菜单。包含：仓库信息/配置仓库、导入导出。
-- **记录录入 (FAB)**: 右下角多功能浮动按钮。已优化背景逻辑：展开时**无明暗遮罩**，点击空白处**自动收起**菜单。
-- **删除确认**: 所有记录删除操作均触发二次确认对话框，防止误删。
+### 2. UI 展现层 (UI Layer)
+- [**DashboardScreen.kt**](file:///app/src/main/java/com/ai/wangcai/ui/DashboardScreen.kt)
+    - **职责**：核心交互 hub。包含自定义日历和每日详情视图。
+    - **布局设计**：采用“双卡片”纵向堆叠（竖屏）或左右切分（横屏）。引入了 `DaySummaryPopover`，利用 `onGloballyPositioned` 获取坐标实现精准的悬浮气泡定位。
+- [**StatsScreen.kt**](file:///app/src/main/java/com/ai/wangcai/ui/StatsScreen.kt)
+    - **职责**：数据可视化中心。
+    - **功能**：通过 Vico 框架渲染统计图表。内置“数据查阅表”，支持在大弹窗中以网格（横屏）或块状列表（竖屏）形式审计本地/云端原始数据。
+- [**SupabaseManagerScreen.kt**](file:///app/src/main/java/com/ai/wangcai/ui/SupabaseManagerScreen.kt)
+    - **职责**：高级调试页面。
+    - **功能**：直接连接云端数据库，允许开发者手动增删改查所有同步表，用于调试同步逻辑。
 
-### 3. 统计报表页 (StatsScreen)
-- **趋势分析**: 体重波动、饮食/饮水、排泄频率的周、月、年统计。
-- **数据快照**: 提供“本地数据”与“云端数据”查看。已修复横竖屏切换时的数据丢失问题，系统会自动在 Activity 重建后重拉数据。
+### 3. 业务逻辑层 (ViewModel & Business Logic)
+- [**PetViewModel.kt**](file:///app/src/main/java/com/ai/wangcai/viewmodel/PetViewModel.kt)
+    - **职责**：数据“指挥官”。
+    - **功能**：封装所有数据库操作。核心逻辑包括：摄入插值计算、云端增量同步算法、操作日志录入逻辑。
 
-### 4. 全局 Supabase 配置与管理
-- **权限机制**: 为了兼容 RLS (Row Level Security) 开启的状态，App 统一使用 **`service_role` (Secret Key)** 进行所有 API 请求。这使得 App 拥有“超级管理员”权限，可无视云端 Policy 直接读写。
-- **配置教程**: 弹窗内集成 SQL 建表脚本及一键复制功能。
-- **云端实验室**: `SupabaseManagerScreen` 已重构为接受 ViewModel 动态注入配置，确保在多环境下的连接一致性。
+### 4. 数据持久化与网络 (Data Layer)
+- [**Entities.kt**](file:///app/src/main/java/com/ai/wangcai/data/Entities.kt)
+    - **职责**：定义所有数据库表模型，配置 `kotlinx.serialization` 的序列化别名（用于对齐 Supabase 表字段）。
+- [**PetDao.kt**](file:///app/src/main/java/com/ai/wangcai/data/PetDao.kt)
+    - **职责**：定义 Room SQL 查询，支持多表关联聚合。
+- [**SupabaseRepository.kt**](file:///app/src/main/java/com/ai/wangcai/data/SupabaseRepository.kt)
+    - **职责**：网络抽象层。基于 Ktor 实现 RESTful 请求，处理与 Supabase 的安全鉴权头（Bearer Auth）。
+
+### 5. 工具类 (Utilities)
+- [**ExcelManager.kt**](file:///app/src/main/java/com/ai/wangcai/util/ExcelManager.kt)
+    - **职责**：Excel 处理中心。通过 Apache POI 读写 `.xlsx` 文件，处理复杂的 ClassLoader 切换逻辑以确保 POI 在 Android 上的稳定性。
+- [**BackupWorker.kt**](file:///app/src/main/java/com/ai/wangcai/util/BackupWorker.kt)
+    - **职责**：静默任务实现。在每日特定的时间窗口（早/晚）自动执行数据导出。
+- [**TranslationHelper.kt**](file:///app/src/main/java/com/ai/wangcai/util/TranslationHelper.kt)
+    - **职责**：名称映射器。负责将数据库原始表/列名翻译为用户友好的中文，或在 UI 展示时进行转换。
 
 ---
 
-## 三、 核心业务逻辑实现细节
+## 二、 关键布局与交互设计
 
-### 1. 饮食摄入“双套插值”公式
-- **持久化基准**: `grossWeight` 已持久化。删除记录后，系统自动寻回前一记录总重作为基准。
-- **逻辑 A: 未空记录**: `变动量 = 电子秤新数值 - 上次记录总重`。
-- **逻辑 B: 空碗记录**: `变动量 = 电子秤新数值 - 碗重`。
+### 1. 响应式布局策略
+系统通过 `LocalConfiguration.current.orientation` 实现真正的响应式设计：
+- **竖屏 (Portrait)**：顶部日历占 3/5 空间，下方详情占 2/5。操作按钮通过悬浮 FAB 菜单展示。
+- **横屏 (Landscape)**：利用 `NavigationRail` 替换底部导航栏，主体内容采用左右分栏，提升平板或横屏手机的利用率。
 
-### 2. 数据库高可用迁移机制
-- **手动迁移仓库 (`DatabaseMigrations.kt`)**: 管理复杂逻辑（如 15-16 版的列新增与 `PRAGMA` 校验）。
-- **自动迁移 (`AutoMigration`)**: 已配置 `exportSchema = true`。
+### 2. 悬浮点触逻辑 (Popover)
+在日历视图中，点击特定日期会触发 `DaySummaryPopover`。该组件不使用标准的 `AlertDialog`，而是基于 `Box` 和绝对坐标偏移实现的自定义气泡，能够完美跟随点击位置弹出，并自动处理屏幕边缘检测。
 
-### 3. 混淆保护 (R8/Proguard)
-- **策略**: 针对 Apache POI 引入的庞大桌面端依赖，采用了“**精准保留 + 深度屏蔽**”策略。
-- **保护范围**: 必须保留 `@Serializable` 类、Room DAO 接口、POI 的 `XSSF` 核心模型以及 `ss.usermodel` 接口。
-- **体积优化**: 经过精细化规则调整，Release 包体积从原始的 70MB+ 压缩至 **5MB** 左右。
+### 3. 操作记录 (Activity Logs)
+每一笔数据的增删改都会在 `activity_logs` 表中生成流水，并在统计页的“操作记录”卡片中实时展示。这不仅是为了记录，也为未来的“撤回/回滚”功能奠定了基础。
 
 ---
 
-## 四、 开发与维护注意事项
-1.  **安全合规**: 由于使用了 `service_role` 密钥，切勿将包含真实密钥的配置块公开。
-2.  **小米/MIUI 兼容性**: 弹窗内的输入框**严禁**包裹在 `SelectionContainer` 中，否则在长按触发系统剪贴板菜单时会触发 `NullPointerException` 崩溃。
-3.  **横屏弹窗**: 必须设置 `usePlatformDefaultWidth = false` 以确保横向撑满。
-4.  **环境配置**: 编译时若报元空间不足，需检查 `gradle.properties` 中的 `-XX:MaxMetaspaceSize=1024m` 设置。
+## 三、 维护与扩展建议
+
+1. **混淆配置**：项目依赖 Apache POI，发布版本必须严格执行 [**rules.keep**](file:///app/src/main/keepRules/rules.keep) 中的规则，否则 POI 核心库及序列化类会被过度混淆导致逻辑崩溃。
+2. **环境连接**：Supabase 的 `service_role` 权限极高，建议在发布正式版前通过配置文件而非硬编码管理密钥。
+3. **小米兼容性补丁**：UI 录入组件（`OutlinedTextField`）外层不可包裹 `SelectionContainer`，以规避某些 MIUI 版本在处理系统剪贴板时的致命崩溃。
 
 ---
 *文档版本：V2.9 (2026-08-25)*
