@@ -16,8 +16,9 @@ object TranslationHelper {
         "饮食饮水记录" to "饮食饮水记录",
         "体重记录" to "体重记录",
         "药品库" to "药品库",
-        "药品打卡记录" to "药品打卡记录",
-        "用药打卡记录" to "药品打卡记录",
+        "medication_logs" to "用药打卡记录",
+        "药品打卡记录" to "用药打卡记录",
+        "用药打卡记录" to "用药打卡记录",
         "拉撒记录" to "拉撒记录",
         "零食库" to "零食库",
         "零食打卡记录" to "零食打卡记录",
@@ -27,24 +28,24 @@ object TranslationHelper {
 
     private val columnMap = mapOf(
         "id" to "编号",
-        "name" to "名称",
-        "tareWeight" to "皮重(g)",
-        "type" to "类型",
+        "name" to "药品名称",
+        "tareWeight" to "净重",
+        "type" to "拉撒类型",
         "isSynced" to "已同步",
         "timestamp" to "时间戳",
         "recordTime" to "记录时间",
-        "amount" to "分量/份量",
-        "grossWeight" to "总重(g)",
+        "amount" to "喂食数量",
+        "grossWeight" to "变动数值",
         "action" to "动作",
-        "method" to "方式",
+        "method" to "吃喝方式",
         "bowlType" to "食具类型",
-        "weight" to "体重(kg)",
+        "weight" to "体重",
         "note" to "备注",
-        "unit" to "单位",
+        "unit" to "剂量单位",
         "medicationId" to "药品编号",
         "medicationName" to "药品名称",
-        "dosage" to "剂量",
-        "shape" to "状态/形状",
+        "dosage" to "用药剂量",
+        "shape" to "拉撒形态",
         "snackId" to "零食编号",
         "snackName" to "零食名称",
         "entityType" to "对象类型",
@@ -53,7 +54,7 @@ object TranslationHelper {
         "breed" to "品种",
         "birthday" to "生日",
         "avatarPath" to "头像路径",
-        "createdAt" to "创建时间",
+        "createdAt" to "记录时间",
         "编号" to "编号"
     )
 
@@ -82,16 +83,15 @@ object TranslationHelper {
 
     fun getColumnOrder(tableName: String): List<String> {
         return when (tableName) {
-            "bowls", "食具配置" -> listOf("id", "name", "tareWeight", "type", "isSynced")
-            "consumption_logs", "饮食饮水记录" -> listOf("id", "action", "method", "type", "bowlType", "amount", "grossWeight", "timestamp", "recordTime", "isSynced")
-            "weight_logs", "体重记录" -> listOf("id", "weight", "note", "timestamp", "recordTime", "isSynced")
-            "medications", "药品库" -> listOf("id", "name", "unit", "isSynced")
-            "medication_logs", "药品打卡记录", "用药打卡记录" -> listOf("id", "medicationId", "medicationName", "dosage", "timestamp", "recordTime", "isSynced")
-            "excretion_logs", "拉撒记录" -> listOf("id", "type", "shape", "timestamp", "recordTime", "isSynced")
-            "snacks", "零食库" -> listOf("id", "name", "unit", "isSynced")
-            "snack_logs", "零食打卡记录" -> listOf("id", "snackId", "snackName", "amount", "timestamp", "recordTime", "isSynced")
-            "activity_logs", "操作记录" -> listOf("id", "action", "entityType", "details", "timestamp", "recordTime")
-            "pet_profiles", "宠物档案" -> listOf("id", "nickname", "breed", "birthday", "timestamp", "createdAt", "isSynced")
+            "bowls", "食具配置" -> listOf("id", "name", "tareWeight")
+            "consumption_logs", "饮食饮水记录" -> listOf("id", "method", "action", "amount", "recordTime")
+            "weight_logs", "体重记录" -> listOf("id", "weight", "note", "recordTime")
+            "medications", "药品库" -> listOf("id", "name", "unit")
+            "medication_logs", "用药打卡记录" -> listOf("id", "medicationName", "dosage", "recordTime", "medicationId")
+            "excretion_logs", "拉撒记录" -> listOf("id", "type", "shape", "recordTime")
+            "snacks", "零食库" -> listOf("id", "name", "unit")
+            "snack_logs", "零食打卡记录" -> listOf("id", "snackName", "amount", "recordTime", "snackId")
+            "pet_profiles", "宠物档案" -> listOf("id", "nickname", "breed", "birthday", "recordTime")
             else -> emptyList()
         }
     }

@@ -31,60 +31,46 @@
 -keep class kotlinx.coroutines.debug.** { *; }
 
 # ----------------------------------------------------
-# Apache POI (Excel) 精细化保留
+# Apache POI (Excel) & XMLBeans 增强保留规则
 # ----------------------------------------------------
-# 仅保留 POI 导出 Excel 必须的核心接口和类
--keep class org.apache.poi.xssf.usermodel.XSSFWorkbook { *; }
--keep class org.apache.poi.xssf.usermodel.XSSFSheet { *; }
--keep class org.apache.poi.xssf.usermodel.XSSFRow { *; }
--keep class org.apache.poi.xssf.usermodel.XSSFCell { *; }
+# 保留所有生成的 Schema 类，防止反射失败
+-keep class org.openxmlformats.schemas.** { *; }
+-keep class schemaorg_apache_xmlbeans.** { *; }
+-keep class com.microsoft.schemas.** { *; }
 
-# 精准保留 ss.usermodel 接口（解决过宽规则警告）
--keep class org.apache.poi.ss.usermodel.Workbook { <methods>; }
--keep class org.apache.poi.ss.usermodel.Sheet { <methods>; }
--keep class org.apache.poi.ss.usermodel.Row { <methods>; }
--keep class org.apache.poi.ss.usermodel.Cell { <methods>; }
--keep class org.apache.poi.ss.usermodel.CellValue { <methods>; }
--keep class org.apache.poi.ss.usermodel.FormulaEvaluator { <methods>; }
+# XMLBeans 关键规则：必须保留 metadata 目录下的所有类及其 typeSystem 静态字段
+-keep class org.apache.xmlbeans.metadata.** { *; }
+-keepclassmembers class org.apache.xmlbeans.metadata.** {
+    public static *** typeSystem;
+}
 
-# 保留 XMLBeans 必要的本地化与加载器
--keep class org.apache.xmlbeans.impl.store.Locale { *; }
--keep class * implements org.apache.poi.extractor.ExtractorProvider
--keep class * implements org.apache.xmlbeans.SchemaTypeLoader
--keep class * implements org.apache.xmlbeans.impl.store.Locale$LoadContext
+# 保留 XMLBeans 实现类，防止反射失败
+-keep class org.apache.xmlbeans.impl.** { *; }
 
-# 解决类型检查警告
--dontwarn org.apache.poi.xslf.draw.**
--dontwarn org.apache.poi.sl.draw.**
--dontwarn org.apache.poi.sl.draw.geom.**
+# 允许 POI 访问的内部类
+-keepattributes InnerClasses, Signature, EnclosingMethod
 
-# 屏蔽 Android 缺失的桌面端依赖警告
--dontwarn com.github.javaparser.**
--dontwarn com.microsoft.schemas.**
--dontwarn de.rototor.pdfbox.**
--dontwarn javax.xml.crypto.**
--dontwarn javax.swing.**
--dontwarn com.sun.org.apache.xml.internal.resolver.**
--dontwarn org.apache.jcp.xml.dsig.internal.dom.**
--dontwarn org.apache.pdfbox.**
--dontwarn java.awt.**
--dontwarn javax.imageio.**
--dontwarn javax.xml.stream.**
--dontwarn net.sf.saxon.**
--dontwarn org.osgi.framework.**
--dontwarn aQute.bnd.**
--dontwarn org.apache.logging.log4j.**
--dontwarn com.github.luben.zstd.**
--dontwarn org.apache.commons.compress.**
--dontwarn org.apache.batik.**
--dontwarn org.apache.maven.**
--dontwarn org.apache.tools.ant.**
--dontwarn org.apache.xml.security.**
--dontwarn org.ietf.jgss.**
+# 屏蔽 Android 环境下缺失的桌面端/OSGi 依赖警告 (POI 引用了很多 Java SE, OSGi and Logging 库)
+-dontwarn org.apache.poi.**
+-dontwarn org.apache.xmlbeans.**
 -dontwarn org.openxmlformats.schemas.**
--dontwarn org.w3c.dom.events.**
--dontwarn org.w3c.dom.svg.**
--dontwarn org.w3c.dom.traversal.**
+-dontwarn com.microsoft.schemas.**
+-dontwarn org.apache.commons.compress.**
+-dontwarn org.apache.commons.collections4.**
+-dontwarn org.apache.commons.math3.**
+-dontwarn org.apache.zstd.**
+-dontwarn com.github.luben.zstd.**
+-dontwarn java.awt.**
+-dontwarn javax.xml.stream.**
+-dontwarn javax.imageio.**
+-dontwarn javax.swing.**
+-dontwarn aQute.bnd.annotation.**
+-dontwarn edu.umd.cs.findbugs.annotations.**
+-dontwarn org.osgi.framework.**
+-dontwarn org.osgi.resource.**
+-dontwarn org.osgi.service.**
+-dontwarn org.osgi.util.**
+-dontwarn org.apache.logging.log4j.**
 
 # ----------------------------------------------------
 # Room & SQLite

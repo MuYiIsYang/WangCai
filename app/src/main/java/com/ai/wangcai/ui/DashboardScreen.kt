@@ -3,13 +3,12 @@ package com.ai.wangcai.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,21 +25,26 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ai.wangcai.R
 import com.ai.wangcai.data.*
 import com.ai.wangcai.viewmodel.PetViewModel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.content.edit
+import kotlin.time.Duration.Companion.milliseconds
 
 // User Palette
 val DeepGreen = Color(0xFF659287)
@@ -75,6 +79,7 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
     var popoverSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var parentBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     var popoverDate by remember { mutableStateOf<Calendar?>(null) }
+    val pendingConfirmRequest by viewModel.pendingConfirmRequest.collectAsState()
     
     // Dialog states
     var showFoodDialog by remember { mutableStateOf(false) }
@@ -95,6 +100,28 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
+    // 自动刷新逻辑：如果当前选中日期是“今天”，且 App 处于前台，
+    // 则每隔 5 秒自动校准一次时间，确保界面显示的时间戳是实时的。
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = System.currentTimeMillis()
+            val selected = Calendar.getInstance().apply { timeInMillis = selectedDateMillis }
+            val current = Calendar.getInstance().apply { timeInMillis = now }
+            
+            // 只有当选中的日期确实是今天，且误差超过 5 秒时刷新
+            if (isSameDay(selected, current) && Math.abs(now - selectedDateMillis) > 5000) {
+                selectedDateMillis = now
+            }
+            kotlinx.coroutines.delay(5000.milliseconds)
+        }
+    }
+
+    // 关键：使初始时间具备实时响应能力
+    val additionInitialDate = remember(selectedDateMillis) {
+        val now = Calendar.getInstance()
+        if (isSameDay(selectedDate, now)) now else selectedDate
+    }
+
     // 云同步启用状态 (持久化存储)
     val prefs = context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
     var cloudSyncEnabled by rememberSaveable { mutableStateOf(prefs.getBoolean("cloud_sync_enabled", true)) }
@@ -102,16 +129,20 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { uri ->
         uri?.let {
             scope.launch {
+                // 通过专门的快照函数获取数据，确保不会因为 Flow 未激活而拿到空列表
+                val snapshot = viewModel.getAllDataSnapshot()
+                
                 com.ai.wangcai.util.ExcelManager.exportData(
                     context, it,
-                    viewModel.allBowls.value,
-                    viewModel.foodLogs.value + viewModel.waterLogs.value,
-                    viewModel.weightLogs.value,
-                    viewModel.medications.value,
-                    viewModel.medicationLogs.value,
-                    viewModel.excretionLogs.value,
-                    viewModel.snacks.value,
-                    viewModel.snackLogs.value
+                    snapshot.bowls,
+                    snapshot.consumptionLogs,
+                    snapshot.weightLogs,
+                    snapshot.medications,
+                    snapshot.medicationLogs,
+                    snapshot.excretionLogs,
+                    snapshot.snacks,
+                    snapshot.snackLogs,
+                    snapshot.petProfile
                 )
                 android.widget.Toast.makeText(context, "备份成功", android.widget.Toast.LENGTH_SHORT).show()
             }
@@ -398,7 +429,26 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
         }
     }
 
-    // Dialogs ...
+    if (pendingConfirmRequest != null) {
+        AlertDialog(
+            onDismissRequest = { }, 
+            title = { Text("云端同步失败", fontWeight = FontWeight.Bold, color = Color.Red) },
+            text = { Text(pendingConfirmRequest!!.message) },
+            confirmButton = {
+                Button(
+                    onClick = { pendingConfirmRequest!!.onResolve(true) },
+                    colors = ButtonDefaults.buttonColors(containerColor = DeepGreen)
+                ) { Text("添加到待办") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingConfirmRequest!!.onResolve(false) }
+                ) { Text("仅本地操作") }
+            }
+        )
+    }
+
+    // Dialogs
     if (showFoodDialog) {
         val bowl by viewModel.foodBowl.collectAsState()
         val logs by viewModel.foodLogs.collectAsState()
@@ -407,10 +457,10 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
         ConsumptionDialog(
             title = "吃吃",
             bowl = bowl,
-            // 修复：如果上次总重为0，则使用碗重作为基准
             lastGrossWeight = if (lastGross > 0f) lastGross else tare,
-            onConfirm = { gross, isFromEmpty -> viewModel.recordConsumption(gross, BowlType.FOOD, isFromEmpty, null, selectedDate) },
-            onUpdateTare = { newTare -> viewModel.updateBowl(bowl?.name ?: "食盆", newTare, BowlType.FOOD) },
+            initialDate = additionInitialDate,
+            onConfirm = { gross, isFromEmpty, date -> viewModel.recordConsumption(gross, BowlType.FOOD, isFromEmpty, null, date) },
+            onUpdateTare = { newTare -> viewModel.updateBowl(bowl?.name ?: "食盆", newTare, BowlType.FOOD, bowl?.id) },
             onDismiss = { showFoodDialog = false }
         )
     }
@@ -423,15 +473,15 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
         ConsumptionDialog(
             title = "喝喝",
             bowl = bowl,
-            // 修复：如果上次总重为0，则使用碗重作为基准
             lastGrossWeight = if (lastGross > 0f) lastGross else tare,
-            onConfirm = { gross, isFromEmpty -> viewModel.recordConsumption(gross, BowlType.WATER, isFromEmpty, null, selectedDate) },
-            onUpdateTare = { newTare -> viewModel.updateBowl(bowl?.name ?: "水盆", newTare, BowlType.WATER) },
+            initialDate = additionInitialDate,
+            onConfirm = { gross, isFromEmpty, date -> viewModel.recordConsumption(gross, BowlType.WATER, isFromEmpty, null, date) },
+            onUpdateTare = { newTare -> viewModel.updateBowl(bowl?.name ?: "水盆", newTare, BowlType.WATER, bowl?.id) },
             onDismiss = { showWaterDialog = false }
         )
     }
 
-    if (showWeightDialog) UpdateWeightDialog("体重记录", "当前体重 (kg)", { weight, note -> viewModel.addWeightLog(weight, note, selectedDate) }) { showWeightDialog = false }
+    if (showWeightDialog) UpdateWeightDialog("体重记录", "当前体重 (kg)", { weight, note, date -> viewModel.addWeightLog(weight, note, date) }, { showWeightDialog = false }, additionInitialDate)
     
     if (showMedLogDialog) {
         val meds by viewModel.medications.collectAsState()
@@ -440,7 +490,7 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
             onConfirm = { id, dose, date -> viewModel.addMedicationLog(id, dose, date) },
             onAddMedType = { showAddMedTypeDialog = true },
             onDismiss = { showMedLogDialog = false },
-            initialDate = selectedDate
+            initialDate = additionInitialDate
         )
     }
 
@@ -453,8 +503,9 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
 
     if (showExcretionDialog) {
         ExcretionLogDialog(
-            onConfirm = { type, shape -> viewModel.addExcretionLog(type, shape, selectedDate) },
-            onDismiss = { showExcretionDialog = false }
+            onConfirm = { type, shape, date -> viewModel.addExcretionLog(type, shape, date) },
+            onDismiss = { showExcretionDialog = false },
+            initialDate = additionInitialDate
         )
     }
 
@@ -465,7 +516,7 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
             onConfirm = { id, amount, date -> viewModel.addSnackLog(id, amount, date) },
             onAddSnackType = { showAddSnackTypeDialog = true },
             onDismiss = { showSnackLogDialog = false },
-            initialDate = selectedDate
+            initialDate = additionInitialDate
         )
     }
 
@@ -492,7 +543,7 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
         val lastBackup = context.getSharedPreferences("backup_prefs", android.content.Context.MODE_PRIVATE)
             .getLong("last_auto_backup", 0L)
         val lastBackupStr = if (lastBackup == 0L) "暂无" else SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(lastBackup))
-        val lastFileName = if (lastBackup == 0L) "无" else "autobackup_${SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(lastBackup))}_xxxxxx.xlsx"
+        val lastFileName = if (lastBackup == 0L) "无" else "自动_${SimpleDateFormat("MMdd_HHmmss", Locale.CHINA).format(Date(lastBackup))}.xlsx"
 
         AlertDialog(
             onDismissRequest = { showBackupDialog = false },
@@ -513,7 +564,7 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
                         }
                         Button(
                             onClick = { 
-                                val fileName = "mybackup_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())}.xlsx"
+                                val fileName = "手动_${SimpleDateFormat("MMdd_HHmmss", Locale.CHINA).format(Date())}.xlsx"
                                 exportLauncher.launch(fileName)
                                 showBackupDialog = false 
                             },
@@ -546,7 +597,6 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
             }
         )
     }
-
 }
 
 @Composable
@@ -573,6 +623,9 @@ fun MonthCalendarView(
     val excretionLogs by viewModel.excretionLogs.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val petProfile by viewModel.petProfile.collectAsState()
+
+    var showSyncTypeDialog by remember { mutableStateOf(false) }
+    var pendingSyncIsUpload by remember { mutableStateOf(true) }
 
     val daysInMonth = remember(currentMonth) {
         val list = mutableListOf<Calendar?>()
@@ -647,8 +700,10 @@ fun MonthCalendarView(
                         val config by viewModel.supabaseConfig.collectAsState()
                         IconButton(
                             onClick = { 
-                                if (config.isValid) viewModel.syncAllToCloud() 
-                                else onAccountClick() // 未设置时自动跳转
+                                if (config.isValid) {
+                                    pendingSyncIsUpload = true
+                                    showSyncTypeDialog = true
+                                } else onAccountClick() 
                             }, 
                             modifier = Modifier.size(32.dp), 
                             enabled = !isSyncing
@@ -657,8 +712,10 @@ fun MonthCalendarView(
                         }
                         IconButton(
                             onClick = { 
-                                if (config.isValid) viewModel.syncAllFromCloud() 
-                                else onAccountClick() // 未设置时自动跳转
+                                if (config.isValid) {
+                                    pendingSyncIsUpload = false
+                                    showSyncTypeDialog = true
+                                } else onAccountClick() 
                             }, 
                             modifier = Modifier.size(32.dp), 
                             enabled = !isSyncing
@@ -757,6 +814,33 @@ fun MonthCalendarView(
             }
             HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f), thickness = 0.5.dp)
         }
+
+        if (showSyncTypeDialog) {
+            AlertDialog(
+                onDismissRequest = { showSyncTypeDialog = false },
+                title = { Text(if (pendingSyncIsUpload) "同步数据到云端" else "从云端下载数据", fontWeight = FontWeight.Bold, color = DeepGreen) },
+                text = { Text(if (pendingSyncIsUpload) "选择同步范围：\n“当前月份”将覆盖云端本月记录，用于修复同步异常；\n“全部数据”将强制上传本地所有记录。" 
+                            else "选择下载范围：\n“当前月份”仅拉取本月云端记录；\n“全部数据”将尝试恢复历史所有记录。") },
+                confirmButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { 
+                            if (pendingSyncIsUpload) viewModel.syncToCloud(false, currentMonth)
+                            else viewModel.syncFromCloud(false, currentMonth)
+                            showSyncTypeDialog = false 
+                        }) { Text("当前月份") }
+                        Button(
+                            onClick = { 
+                                if (pendingSyncIsUpload) viewModel.syncToCloud(true, currentMonth)
+                                else viewModel.syncFromCloud(true, currentMonth)
+                                showSyncTypeDialog = false 
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DeepGreen)
+                        ) { Text("全部数据") }
+                    }
+                },
+                dismissButton = { TextButton(onClick = { showSyncTypeDialog = false }) { Text("取消") } }
+            )
+        }
     }
 }
 
@@ -837,7 +921,9 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
             list.add(RecordItem(it.timestamp, "体重记录", "${it.weight}kg", R.drawable.ic_weight, MediumGreen, it))
         }
         medLogs.filter { isSameDay(it.timestamp, date) }.forEach { log ->
-            val medName = log.medicationName.ifBlank { medications.find { it.id == log.medicationId }?.name ?: "未知药品" }
+            val medName = log.medicationName.ifBlank { 
+                medications.find { it.id == log.medicationId || (it.name == log.medicationName && it.name.isNotBlank()) }?.name ?: "未知药品" 
+            }
             list.add(RecordItem(log.timestamp, "用药", "$medName ${log.dosage}", R.drawable.ic_medicine, MediumGreen, log))
         }
         excretionLogs.filter { isSameDay(it.timestamp, date) }.forEach {
@@ -845,7 +931,9 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
             list.add(RecordItem(it.timestamp, typeStr, it.shape ?: "记录", resId, color, it))
         }
         snackLogs.filter { isSameDay(it.timestamp, date) }.forEach { log ->
-            val snackName = log.snackName.ifBlank { snacks.find { it.id == log.snackId }?.name ?: "未知零食" }
+            val snackName = log.snackName.ifBlank { 
+                snacks.find { it.id == log.snackId || (it.name == log.snackName && it.name.isNotBlank()) }?.name ?: "未知零食" 
+            }
             list.add(RecordItem(log.timestamp, "零食", "$snackName ${log.amount}", R.drawable.ic_snack, DeepGreen, log))
         }
         list.sortByDescending { it.timestamp }
@@ -939,13 +1027,23 @@ fun RecordRow(record: RecordItem, onClick: () -> Unit) {
             .padding(vertical = 2.dp, horizontal = 4.dp), // 进一步缩小纵向间距
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(record.timestamp)), 
-            style = MaterialTheme.typography.bodySmall,
-            fontSize = 11.sp, // 显式缩小字号
-            color = Color.Gray, 
-            modifier = Modifier.width(38.dp) // 缩小时间占用宽度
-        )
+        Column(
+            modifier = Modifier.width(38.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = SimpleDateFormat("MM/dd", Locale.CHINA).format(Date(record.timestamp)), 
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 9.sp, 
+                color = Color.LightGray
+            )
+            Text(
+                text = SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(record.timestamp)), 
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 11.sp, 
+                color = Color.Gray
+            )
+        }
         Spacer(modifier = Modifier.width(6.dp)) 
         Box(
             modifier = Modifier
@@ -978,12 +1076,273 @@ fun RecordRow(record: RecordItem, onClick: () -> Unit) {
 }
 
 @Composable
+fun DateTimePickerButton(
+    currentDateTime: Calendar,
+    onDateTimeSelected: (Calendar) -> Unit
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    
+    val isToday = isSameDay(currentDateTime, Calendar.getInstance())
+    val displayText = SimpleDateFormat("MM/dd HH:mm", Locale.CHINA).format(currentDateTime.time)
+
+    // 优雅样式: 今天高亮显示 (深绿色调)，非今天显示普通样式 (灰色调)
+    OutlinedButton(
+        onClick = { showPicker = true },
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (isToday) DeepGreen.copy(alpha = 0.1f) else Color.Transparent,
+            contentColor = if (isToday) DeepGreen else Color.Gray
+        ),
+        border = BorderStroke(1.dp, if (isToday) DeepGreen.copy(alpha = 0.3f) else Color.LightGray.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(8.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+        modifier = Modifier.height(30.dp)
+    ) {
+        Icon(Icons.Default.Schedule, null, modifier = Modifier.size(14.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(text = displayText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+
+    if (showPicker) {
+        WheelDateTimePickerDialog(
+            initialDateTime = currentDateTime,
+            onConfirm = { 
+                onDateTimeSelected(it)
+                showPicker = false 
+            },
+            onDismiss = { showPicker = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun <T> WheelPicker(
+    items: List<T>,
+    initialIndex: Int,
+    onItemSelected: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    label: (T) -> String = { it.toString() }
+) {
+    val itemHeight = 35.dp
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    val snapFlingBehavior = rememberSnapFlingBehavior(lazyListState = listState)
+    
+    // 使用 derivedStateOf 实时计算中心项索引
+    val centerIndex by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) initialIndex
+            else {
+                val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+                visibleItems.minByOrNull { 
+                    Math.abs((it.offset + it.size / 2) - viewportCenter) 
+                }?.index ?: initialIndex
+            }
+        }
+    }
+
+    // 只有当索引真正变化且不再滚动时才回调，避免初始化时的冲突
+    LaunchedEffect(centerIndex, listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress && centerIndex in items.indices) {
+            onItemSelected(items[centerIndex])
+        }
+    }
+
+    Box(modifier = modifier.height(itemHeight * 3), contentAlignment = Alignment.Center) {
+        // 选中区域高亮
+        Surface(
+            modifier = Modifier.fillMaxWidth().height(itemHeight),
+            color = DeepGreen.copy(alpha = 0.05f),
+            shape = RoundedCornerShape(4.dp)
+        ) {}
+        
+        LazyColumn(
+            state = listState,
+            flingBehavior = snapFlingBehavior,
+            contentPadding = PaddingValues(vertical = itemHeight),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(items.size) { index ->
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(itemHeight),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val isSelected by remember { derivedStateOf { centerIndex == index } }
+                    Text(
+                        text = label(items[index]),
+                        fontSize = if (isSelected) 15.sp else 13.sp,
+                        color = if (isSelected) DeepGreen else Color.Gray.copy(alpha = 0.6f),
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun WheelDateTimePickerDialog(
+    initialDateTime: Calendar,
+    onConfirm: (Calendar) -> Unit,
+    onDismiss: () -> Unit
+) {
+    // 生成最近30天和未来7天
+    val dates = remember {
+        val list = mutableListOf<Calendar>()
+        val start = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -30) }
+        repeat(38) {
+            list.add(start.clone() as Calendar)
+            start.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        list
+    }
+    
+    val hours = (0..23).toList()
+    val minutes = (0..59).toList()
+    
+    var selectedDate by remember { mutableStateOf(dates.find { isSameDay(it, initialDateTime) } ?: dates[30]) }
+    var selectedHour by remember { mutableIntStateOf(initialDateTime.get(Calendar.HOUR_OF_DAY)) }
+    var selectedMinute by remember { mutableIntStateOf(initialDateTime.get(Calendar.MINUTE)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择记录时间", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = DeepGreen) },
+        text = {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(120.dp), 
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                WheelPicker(
+                    items = dates,
+                    initialIndex = dates.indexOfFirst { isSameDay(it, initialDateTime) }.coerceAtLeast(0),
+                    onItemSelected = { selectedDate = it },
+                    modifier = Modifier.weight(2.5f),
+                    label = { cal ->
+                        val today = Calendar.getInstance()
+                        val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+                        when {
+                            isSameDay(cal, today) -> "今天"
+                            isSameDay(cal, yesterday) -> "昨天"
+                            else -> SimpleDateFormat("MM月dd日", Locale.CHINA).format(cal.time)
+                        }
+                    }
+                )
+                WheelPicker(
+                    items = hours,
+                    initialIndex = hours.indexOf(initialDateTime.get(Calendar.HOUR_OF_DAY)).coerceAtLeast(0),
+                    onItemSelected = { selectedHour = it },
+                    modifier = Modifier.weight(1f),
+                    label = { "%02d".format(it) }
+                )
+                Text(":", fontWeight = FontWeight.Bold, color = DeepGreen)
+                WheelPicker(
+                    items = minutes,
+                    initialIndex = minutes.indexOf(initialDateTime.get(Calendar.MINUTE)).coerceAtLeast(0),
+                    onItemSelected = { selectedMinute = it },
+                    modifier = Modifier.weight(1f),
+                    label = { "%02d".format(it) }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val result = (selectedDate.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, selectedHour)
+                    set(Calendar.MINUTE, selectedMinute)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }
+                onConfirm(result)
+            }) { Text("确定", color = DeepGreen) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
+fun WheelDatePickerDialog(
+    initialDate: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val initialCal = Calendar.getInstance()
+    if (initialDate.isNotBlank()) {
+        try {
+            val parts = initialDate.split("-")
+            initialCal.set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
+        } catch (_: Exception) {}
+    }
+
+    val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+    val years = (2000..currentYear).toList()
+    val months = (1..12).toList()
+    
+    var selectedYear by remember { mutableIntStateOf(initialCal.get(Calendar.YEAR)) }
+    var selectedMonth by remember { mutableIntStateOf(initialCal.get(Calendar.MONTH) + 1) }
+    
+    // 动态计算该月天数
+    val days by remember(selectedYear, selectedMonth) {
+        derivedStateOf {
+            val cal = Calendar.getInstance()
+            cal.set(selectedYear, selectedMonth - 1, 1)
+            val maxDay = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+            (1..maxDay).toList()
+        }
+    }
+    var selectedDay by remember { mutableIntStateOf(initialCal.get(Calendar.DAY_OF_MONTH).coerceAtMost(days.last())) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择生日", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = DeepGreen) },
+        text = {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(120.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                WheelPicker(
+                    items = years,
+                    initialIndex = years.indexOf(selectedYear).coerceAtLeast(0),
+                    onItemSelected = { selectedYear = it },
+                    modifier = Modifier.weight(1.5f),
+                    label = { "${it}年" }
+                )
+                WheelPicker(
+                    items = months,
+                    initialIndex = months.indexOf(selectedMonth).coerceAtLeast(0),
+                    onItemSelected = { selectedMonth = it },
+                    modifier = Modifier.weight(1f),
+                    label = { "${it}月" }
+                )
+                WheelPicker(
+                    items = days,
+                    initialIndex = days.indexOf(selectedDay.coerceAtMost(days.last())).coerceAtLeast(0),
+                    onItemSelected = { selectedDay = it },
+                    modifier = Modifier.weight(1f),
+                    label = { "${it}日" }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onConfirm("%04d-%02d-%02d".format(selectedYear, selectedMonth, selectedDay))
+            }) { Text("确定", color = DeepGreen) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
 fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: () -> Unit) {
     val raw = record.rawData
     var valueInput by remember { mutableStateOf("") }
     var noteInput by remember { mutableStateOf(if (raw is WeightLog) raw.note ?: "" else "") }
     var excretionType by remember { mutableStateOf(if (raw is ExcretionLog) raw.type else ExcretionType.POOP) }
     var excretionShape by remember { mutableStateOf(if (raw is ExcretionLog) raw.shape ?: "正常" else "正常") }
+    var selectedDateTime by remember { mutableStateOf(Calendar.getInstance().apply { timeInMillis = record.timestamp }) }
+    
     LaunchedEffect(raw) {
         valueInput = when(raw) {
             is ConsumptionLog -> raw.amount.toString()
@@ -1019,34 +1378,50 @@ fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: ()
                         }
                     }
                 } else {
-                    OutlinedTextField(value = valueInput, onValueChange = { valueInput = it }, label = { Text("数值") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-                    if (raw is WeightLog) OutlinedTextField(value = noteInput, onValueChange = { noteInput = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
+                    SelectAllOutlinedTextField(value = valueInput, onValueChange = { valueInput = it }, label = { Text("数值") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                    if (raw is WeightLog) SelectAllOutlinedTextField(value = noteInput, onValueChange = { noteInput = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val newVal = valueInput.toFloatOrNull() ?: 0f
-                val updated: Any? = when(raw) {
-                    is ConsumptionLog -> raw.copy(amount = newVal)
-                    is WeightLog -> raw.copy(weight = newVal, note = noteInput.ifBlank { null })
-                    is MedicationLog -> raw.copy(dosage = newVal)
-                    is ExcretionLog -> raw.copy(type = excretionType, shape = excretionShape)
-                    is SnackLog -> raw.copy(amount = newVal)
-                    else -> null
-                }
-                updated?.let { onConfirm(it) }
-            }) { Text("保存", color = DeepGreen) }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                DateTimePickerButton(selectedDateTime) { selectedDateTime = it }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(onClick = {
+                    val newVal = valueInput.toFloatOrNull() ?: 0f
+                    val newTs = selectedDateTime.timeInMillis
+                    val updated: Any? = when(raw) {
+                        is ConsumptionLog -> raw.copy(amount = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
+                        is WeightLog -> raw.copy(weight = newVal, note = noteInput.ifBlank { null }, timestamp = newTs, recordTime = newTs.toDbTime())
+                        is MedicationLog -> raw.copy(dosage = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
+                        is ExcretionLog -> raw.copy(type = excretionType, shape = excretionShape, timestamp = newTs, recordTime = newTs.toDbTime())
+                        is SnackLog -> raw.copy(amount = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
+                        else -> null
+                    }
+                    updated?.let { onConfirm(it) }
+                }) { Text("保存", color = DeepGreen) }
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        dismissButton = null
     )
 }
 
 @Composable
-fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean) -> Unit, onUpdateTare: (Float) -> Unit, onDismiss: () -> Unit, lastGrossWeight: Float) {
+fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean, Calendar) -> Unit, onUpdateTare: (Float) -> Unit, onDismiss: () -> Unit, lastGrossWeight: Float, initialDate: Calendar) {
     var grossInput by remember { mutableStateOf("") }
     var showTareEdit by remember { mutableStateOf(false) }
-    var mode by remember { mutableIntStateOf(0) } // 0: 未空记录, 1: 空碗记录
+    var mode by remember { mutableIntStateOf(0) } 
+    var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
+    var isManualTime by remember { mutableStateOf(false) } // 标记用户是否手动改过时间
+
+    // 自动校准：如果用户没动手改过，且初始时间在变（实时的），则同步更新
+    LaunchedEffect(initialDate) {
+        if (!isManualTime) {
+            selectedDateTime = initialDate.clone() as Calendar
+        }
+    }
+
     val currentTare = bowl?.tareWeight ?: 0f
     var errorText by remember { mutableStateOf<String?>(null) }
     
@@ -1054,10 +1429,8 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean) ->
     val diffAmount = remember(grossInput, mode) {
         val input = grossInput.toFloatOrNull() ?: return@remember null
         if (mode == 1) {
-            // 空碗模式：新数值 - 碗重
             input - currentTare
         } else {
-            // 未空模式：新数值 - 上次总重
             input - lastGrossWeight
         }
     }
@@ -1089,7 +1462,7 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean) ->
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = grossInput, onValueChange = { grossInput = it; errorText = null }, label = { Text("当前总重 (碗+内容)") }, placeholder = { Text("请输入电子秤数值") }, isError = errorText != null, supportingText = { errorText?.let { Text(it, color = Color.Red) } }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+                SelectAllOutlinedTextField(value = grossInput, onValueChange = { grossInput = it; errorText = null }, label = { Text("当前总重 (碗+内容)") }, placeholder = { Text("请输入电子秤数值") }, isError = errorText != null, supportingText = { errorText?.let { Text(it, color = Color.Red) } }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(selected = mode == 0, onClick = { mode = 0 }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen))
                     Text("未空记录", modifier = Modifier.clickable { mode = 0 })
@@ -1099,48 +1472,140 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean) ->
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { val g = grossInput.toFloatOrNull() ?: 0f; if (g < currentTare) errorText = "重量不能小于碗重 (${currentTare}g)" else { onConfirm(g, mode == 1); onDismiss() } }) { Text("确定", color = DeepGreen) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        confirmButton = { 
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                DateTimePickerButton(selectedDateTime) { 
+                    selectedDateTime = it
+                    isManualTime = true // 一旦手动选择，停止实时跳动
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                TextButton(onClick = { 
+                    val g = grossInput.toFloatOrNull() ?: 0f; 
+                    if (g < currentTare) errorText = "重量不能小于碗重 (${currentTare}g)" 
+                    else { onConfirm(g, mode == 1, selectedDateTime); onDismiss() } 
+                }) { Text("确定", color = DeepGreen) } 
+            }
+        },
+        dismissButton = null
     )
     if (showTareEdit) {
         var newTare by remember { mutableStateOf(currentTare.toString()) }
-        AlertDialog(onDismissRequest = { showTareEdit = false }, title = { Text("设置碗重") }, text = { OutlinedTextField(value = newTare, onValueChange = { newTare = it }, label = { Text("皮重 (g)") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) }, confirmButton = { TextButton(onClick = { newTare.toFloatOrNull()?.let { onUpdateTare(it) }; showTareEdit = false }) { Text("保存", color = DeepGreen) } })
+        AlertDialog(onDismissRequest = { showTareEdit = false }, title = { Text("设置碗重") }, text = { SelectAllOutlinedTextField(value = newTare, onValueChange = { newTare = it }, label = { Text("皮重 (g)") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) }, confirmButton = { TextButton(onClick = { newTare.toFloatOrNull()?.let { onUpdateTare(it) }; showTareEdit = false }) { Text("保存", color = DeepGreen) } })
     }
 }
 
 @Composable
-fun MedicationLogDialog(meds: List<Medication>, onConfirm: (Long, Float, Calendar) -> Unit, onAddMedType: () -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
-    var selectedId by remember { mutableLongStateOf(meds.firstOrNull()?.id ?: 0L) }
+fun MedicationLogDialog(meds: List<Medication>, onConfirm: (String, Float, Calendar) -> Unit, onAddMedType: () -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
+    var selectedId by remember { mutableStateOf(meds.firstOrNull()?.id ?: "") }
     var dose by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("记录用药"); IconButton(onClick = onAddMedType) { Icon(Icons.Default.AddCircle, null, tint = DeepGreen) } } }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (meds.isEmpty()) Text("暂无药品，请点击右上角添加", color = Color.Red) else { meds.forEach { med -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedId = med.id }) { RadioButton(selected = selectedId == med.id, onClick = { selectedId = med.id }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen)); Text("${med.name} (${med.unit})") } }; OutlinedTextField(value = dose, onValueChange = { dose = it }, label = { Text("剂量") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) } } }, confirmButton = { TextButton(enabled = meds.isNotEmpty(), onClick = { dose.toFloatOrNull()?.let { onConfirm(selectedId, it, initialDate.clone() as Calendar) }; onDismiss() }) { Text("确定", color = DeepGreen) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+    var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
+    var isManualTime by remember { mutableStateOf(false) }
+
+    LaunchedEffect(initialDate) {
+        if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss, 
+        title = { Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("记录用药"); IconButton(onClick = onAddMedType) { Icon(Icons.Default.AddCircle, null, tint = DeepGreen) } } }, 
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (meds.isEmpty()) Text("暂无药品，请点击右上角添加", color = Color.Red) else { meds.forEach { med -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedId = med.id }) { RadioButton(selected = selectedId == med.id, onClick = { selectedId = med.id }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen)); Text("${med.name} (${med.unit})") } }; SelectAllOutlinedTextField(value = dose, onValueChange = { dose = it }, label = { Text("剂量") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) } } }, 
+        confirmButton = { 
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                DateTimePickerButton(selectedDateTime) { 
+                    selectedDateTime = it
+                    isManualTime = true
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                TextButton(enabled = meds.isNotEmpty(), onClick = { 
+                    dose.toFloatOrNull()?.let { onConfirm(selectedId, it, selectedDateTime) }
+                    onDismiss() 
+                }) { Text("确定", color = DeepGreen) } 
+            }
+        }, 
+        dismissButton = null
+    )
 }
 
 @Composable
 fun AddMedTypeDialog(onConfirm: (String, String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var unit by remember { mutableStateOf("粒") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("新增药品种类") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }); OutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("单位") }) } }, confirmButton = { TextButton(onClick = { onConfirm(name, unit); onDismiss() }) { Text("添加", color = DeepGreen) } })
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("新增药品种类") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { SelectAllOutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }); SelectAllOutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("单位") }) } }, confirmButton = { TextButton(onClick = { onConfirm(name, unit); onDismiss() }) { Text("添加", color = DeepGreen) } })
 }
 
 @Composable
-fun SnackLogDialog(snacks: List<Snack>, onConfirm: (Long, Float, Calendar) -> Unit, onAddSnackType: () -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
-    var selectedId by remember { mutableLongStateOf(snacks.firstOrNull()?.id ?: 0L) }
+fun SnackLogDialog(snacks: List<Snack>, onConfirm: (String, Float, Calendar) -> Unit, onAddSnackType: () -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
+    var selectedId by remember { mutableStateOf(snacks.firstOrNull()?.id ?: "") }
     var amount by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("啥好吃的?"); IconButton(onClick = onAddSnackType) { Icon(Icons.Default.AddCircle, null, tint = DeepGreen) } } }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (snacks.isEmpty()) Text("暂无零食，请点击右上角添加", color = Color.Red) else { snacks.forEach { snack -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedId = snack.id }) { RadioButton(selected = selectedId == snack.id, onClick = { selectedId = snack.id }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen)); Text("${snack.name} (${snack.unit})") } }; OutlinedTextField(value = amount, onValueChange = { amount = it }, label = { Text("份量") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) } } }, confirmButton = { TextButton(enabled = snacks.isNotEmpty(), onClick = { amount.toFloatOrNull()?.let { onConfirm(selectedId, it, initialDate.clone() as Calendar) }; onDismiss() }) { Text("确定", color = DeepGreen) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+    var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
+    var isManualTime by remember { mutableStateOf(false) }
+
+    LaunchedEffect(initialDate) {
+        if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss, 
+        title = { Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("啥好吃的?"); IconButton(onClick = onAddSnackType) { Icon(Icons.Default.AddCircle, null, tint = DeepGreen) } } }, 
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (snacks.isEmpty()) Text("暂无零食，请点击右上角添加", color = Color.Red) else { snacks.forEach { snack -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedId = snack.id }) { RadioButton(selected = selectedId == snack.id, onClick = { selectedId = snack.id }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen)); Text("${snack.name} (${snack.unit})") } }; SelectAllOutlinedTextField(value = amount, onValueChange = { amount = it }, label = { Text("份量") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) } } }, 
+        confirmButton = { 
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                DateTimePickerButton(selectedDateTime) { 
+                    selectedDateTime = it
+                    isManualTime = true
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                TextButton(enabled = snacks.isNotEmpty(), onClick = { 
+                    amount.toFloatOrNull()?.let { onConfirm(selectedId, it, selectedDateTime) }
+                    onDismiss() 
+                }) { Text("确定", color = DeepGreen) } 
+            }
+        }, 
+        dismissButton = null
+    )
 }
 
 @Composable
 fun AddSnackTypeDialog(onConfirm: (String, String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var unit by remember { mutableStateOf("g") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("新增零食种类") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }); OutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("单位") }) } }, confirmButton = { TextButton(onClick = { onConfirm(name, unit); onDismiss() }) { Text("添加", color = DeepGreen) } })
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("新增零食种类") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { SelectAllOutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }); SelectAllOutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("单位") }) } }, confirmButton = { TextButton(onClick = { onConfirm(name, unit); onDismiss() }) { Text("添加", color = DeepGreen) } })
 }
 
 @Composable
-fun UpdateWeightDialog(title: String, label: String, onConfirm: (Float, String?) -> Unit, onDismiss: () -> Unit) {
+fun UpdateWeightDialog(title: String, label: String, onConfirm: (Float, String?, Calendar) -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
     var input by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(title, color = MediumGreen, fontWeight = FontWeight.Bold) }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(value = input, onValueChange = { input = it }, label = { Text(label) }, singleLine = true, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)); OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注 (可选)") }, singleLine = true) } }, confirmButton = { TextButton(onClick = { input.toFloatOrNull()?.let { onConfirm(it, note.ifBlank { null }) }; onDismiss() }) { Text("确定", color = MediumGreen) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+    var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
+    var isManualTime by remember { mutableStateOf(false) }
+
+    LaunchedEffect(initialDate) {
+        if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss, 
+        title = { Text(title, color = MediumGreen, fontWeight = FontWeight.Bold) }, 
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { SelectAllOutlinedTextField(value = input, onValueChange = { input = it }, label = { Text(label) }, singleLine = true, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)); SelectAllOutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注 (可选)") }, singleLine = true) } }, 
+        confirmButton = { 
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                DateTimePickerButton(selectedDateTime) { 
+                    selectedDateTime = it
+                    isManualTime = true
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                TextButton(onClick = { 
+                    input.toFloatOrNull()?.let { onConfirm(it, note.ifBlank { null }, selectedDateTime) }
+                    onDismiss() 
+                }) { Text("确定", color = MediumGreen) } 
+            }
+        }, 
+        dismissButton = null
+    )
 }
 
 @Composable
@@ -1183,14 +1648,14 @@ fun PetProfileDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
+                    SelectAllOutlinedTextField(
                         value = nickname, 
                         onValueChange = { nickname = it }, 
                         label = { Text("名字") }, 
                         modifier = Modifier.weight(1f),
                         singleLine = true
                     )
-                    OutlinedTextField(
+                    SelectAllOutlinedTextField(
                         value = breed, 
                         onValueChange = { breed = it }, 
                         label = { Text("品种") }, 
@@ -1232,159 +1697,35 @@ fun PetProfileDialog(
     )
 
     if (showDatePicker) {
-        val calendar = Calendar.getInstance()
-        if (birthday.isNotBlank()) {
-            try {
-                val parts = birthday.split("-")
-                calendar.set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
-            } catch (_: Exception) {}
-        }
-        
-        var tempDate by remember { mutableStateOf(calendar.clone() as Calendar) }
-        var viewingMonth by remember { mutableStateOf(calendar.clone() as Calendar) }
-
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showDatePicker = false }) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth(0.98f)
-                    .wrapContentHeight()
-                    .scale(0.9f), 
-                shape = RoundedCornerShape(24.dp),
-                color = Color.White,
-                shadowElevation = 12.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(8.dp), // 缩小 Padding
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // 1. 月份切换与操作按钮 (合并到一行)
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 左侧：月份切换
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = { viewingMonth = (viewingMonth.clone() as Calendar).apply { add(Calendar.MONTH, -1) } },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.Default.ChevronLeft, null, tint = DeepGreen, modifier = Modifier.size(20.dp))
-                            }
-                            Text(
-                                text = SimpleDateFormat("yyyy年MM月", Locale.CHINA).format(viewingMonth.time),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = DeepGreen,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                            IconButton(
-                                onClick = { viewingMonth = (viewingMonth.clone() as Calendar).apply { add(Calendar.MONTH, 1) } },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.Default.ChevronRight, null, tint = DeepGreen, modifier = Modifier.size(20.dp))
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        // 右侧：操作按钮 (红色叉号和绿色对号)
-                        IconButton(onClick = { showDatePicker = false }, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Close, null, tint = Color.Red.copy(alpha = 0.7f), modifier = Modifier.size(22.dp))
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        IconButton(
-                            onClick = {
-                                birthday = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(tempDate.time)
-                                showDatePicker = false
-                            },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.Default.Check, null, tint = DeepGreen, modifier = Modifier.size(22.dp))
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp)) // 进一步压缩间距
-
-                    // 2. 自定义日历网格
-                    val days = remember(viewingMonth) {
-                        val list = mutableListOf<Calendar?>()
-                        val cal = viewingMonth.clone() as Calendar
-                        cal.set(Calendar.DAY_OF_MONTH, 1)
-                        val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK) 
-                        repeat(firstDayOfWeek - 1) { list.add(null) }
-                        val maxDays = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
-                        repeat(maxDays) {
-                            list.add(cal.clone() as Calendar)
-                            cal.add(Calendar.DAY_OF_MONTH, 1)
-                        }
-                        list
-                    }
-
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp) // 统一行间距
-                    ) {
-                        // 周标题
-                        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                            listOf("日", "一", "二", "三", "四", "五", "六").forEach {
-                                Text(
-                                    text = it,
-                                    modifier = Modifier.weight(1f),
-                                    textAlign = TextAlign.Center,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (it == "日" || it == "六") Color.Red.copy(alpha = 0.6f) else Color.Gray
-                                )
-                            }
-                        }
-                        
-                        // 日期数字
-                        val rows = days.chunked(7)
-                        rows.forEach { week ->
-                            Row(modifier = Modifier.fillMaxWidth()) {
-                                week.forEach { day ->
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .aspectRatio(1.1f) // 微调高度比例，防止挤压
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (day != null && isSameDay(day, tempDate)) DeepGreen 
-                                                else Color.Transparent
-                                            )
-                                            .clickable(enabled = day != null) {
-                                                if (day != null) tempDate = day.clone() as Calendar
-                                            },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (day != null) {
-                                            Text(
-                                                text = day.get(Calendar.DAY_OF_MONTH).toString(),
-                                                color = if (isSameDay(day, tempDate)) Color.White else Color.DarkGray,
-                                                fontWeight = if (isSameDay(day, tempDate)) FontWeight.Bold else FontWeight.Normal,
-                                                style = MaterialTheme.typography.bodyLarge // 调大日期字号
-                                            )
-                                        }
-                                    }
-                                }
-                                if (week.size < 7) {
-                                    repeat(7 - week.size) { Spacer(modifier = Modifier.weight(1f)) }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        WheelDatePickerDialog(
+            initialDate = birthday,
+            onConfirm = { 
+                birthday = it
+                showDatePicker = false 
+            },
+            onDismiss = { showDatePicker = false }
+        )
     }
 }
 
 @Composable
-fun ExcretionLogDialog(onConfirm: (ExcretionType, String?) -> Unit, onDismiss: () -> Unit) {
+fun ExcretionLogDialog(onConfirm: (ExcretionType, String?, Calendar) -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
     var selectedType by remember { mutableStateOf(ExcretionType.POOP) }
-    val shapes = if (selectedType == ExcretionType.POOP) listOf("正常", "软便", "稀便") else listOf("正常", "尿多", "尿少")
+    var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
+    var isManualTime by remember { mutableStateOf(false) }
+    val shapes = if (selectedType == ExcretionType.POOP) listOf("正常", "软便", "稀便") else listOf("尿多", "正常", "尿少")
     
+    LaunchedEffect(initialDate) {
+        if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss, 
-        title = { Text("拉了?撒了?", fontWeight = FontWeight.Bold, color = DeepGreen) },
+        title = { 
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("拉了?撒了?", fontWeight = FontWeight.Bold, color = DeepGreen)
+            }
+        },
         text = { 
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 // 类型选择层
@@ -1430,7 +1771,7 @@ fun ExcretionLogDialog(onConfirm: (ExcretionType, String?) -> Unit, onDismiss: (
                                     .height(42.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(if(selectedType == ExcretionType.POOP) PoopColor else PeeColor)
-                                    .clickable { onConfirm(selectedType, shape); onDismiss() }
+                                    .clickable { onConfirm(selectedType, shape, selectedDateTime); onDismiss() }
                             ) {
                                 Text(
                                     text = shape,
@@ -1444,9 +1785,18 @@ fun ExcretionLogDialog(onConfirm: (ExcretionType, String?) -> Unit, onDismiss: (
                     }
                 }
             }
+        },
+        confirmButton = {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                DateTimePickerButton(selectedDateTime) { 
+                    selectedDateTime = it
+                    isManualTime = true
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+            }
         }, 
-        confirmButton = {}, 
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) } }
+        dismissButton = null
     )
 }
 
@@ -1515,7 +1865,7 @@ fun DaySummaryPopover(
                 shape = RoundedCornerShape(12.dp),
                 color = Color.White, // 修改：改为完全不透明
                 shadowElevation = 6.dp, 
-                border = androidx.compose.foundation.BorderStroke(1.dp, DeepGreen.copy(alpha = 0.2f)) // 恢复边框
+                border = BorderStroke(1.dp, DeepGreen.copy(alpha = 0.2f)) // 恢复边框
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),

@@ -10,10 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -68,6 +69,8 @@ fun StatsScreen(viewModel: PetViewModel) {
     val snacks by viewModel.snacks.collectAsState()
     val snackLogs by viewModel.snackLogs.collectAsState()
     val activityLogs by viewModel.activityLogs.collectAsState()
+    val syncLogs by viewModel.syncLogs.collectAsState()
+    val pendingCount by viewModel.pendingTasksCount.collectAsState()
 
     var showTableDialog by rememberSaveable { mutableStateOf(false) }
     var dialogTitle by rememberSaveable { mutableStateOf("") }
@@ -89,20 +92,19 @@ fun StatsScreen(viewModel: PetViewModel) {
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { showTableDialog = false },
             properties = androidx.compose.ui.window.DialogProperties(
-                usePlatformDefaultWidth = false // 关键：禁用系统默认宽度限制
+                usePlatformDefaultWidth = false
             )
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth(if (isLandscape) 0.95f else 0.92f)
-                    .heightIn(max = if (isLandscape) 350.dp else 750.dp) // 增加竖屏最大高度，从 600 提升到 750
-                    .padding(vertical = 12.dp), // 稍微减小外部留白
+                    .heightIn(max = if (isLandscape) 350.dp else 750.dp)
+                    .padding(vertical = 12.dp),
                 shape = RoundedCornerShape(24.dp),
                 color = Color.White,
                 shadowElevation = 8.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-                    // 顶部栏：标题（缩小）+ 右上角关闭按钮
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -110,7 +112,7 @@ fun StatsScreen(viewModel: PetViewModel) {
                     ) {
                         Text(
                             text = dialogTitle,
-                            fontSize = 14.sp, // 大约是 headlineSmall 的 0.6 倍
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = DeepGreen
                         )
@@ -130,10 +132,8 @@ fun StatsScreen(viewModel: PetViewModel) {
                     
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // 内容区
                     Box(modifier = Modifier.weight(1f)) {
                         if (tableDataList.isEmpty()) {
-                            // 加载中占位
                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = DeepGreen)
                             }
@@ -144,10 +144,7 @@ fun StatsScreen(viewModel: PetViewModel) {
                             ) {
                                 items(tableDataList.size) { index ->
                                     val (tableName, rowData) = tableDataList[index]
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        // 表名作为一个小副标题
+                                    Column(modifier = Modifier.fillMaxWidth()) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Box(modifier = Modifier.size(3.dp, 16.dp).background(DeepGreen, RoundedCornerShape(2.dp)))
                                             Spacer(modifier = Modifier.width(8.dp))
@@ -162,7 +159,6 @@ fun StatsScreen(viewModel: PetViewModel) {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         
                                         if (isLandscape) {
-                                            // --- 横屏：表格布局 ---
                                             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                                                 val minRowWidth = maxWidth
                                                 val columns = rowData.keys.toList()
@@ -175,7 +171,6 @@ fun StatsScreen(viewModel: PetViewModel) {
                                                         .border(1.dp, DeepGreen.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
                                                         .horizontalScroll(rememberScrollState())
                                                 ) {
-                                                    // 表头
                                                     Row(
                                                         modifier = Modifier
                                                             .widthIn(min = minRowWidth)
@@ -195,7 +190,6 @@ fun StatsScreen(viewModel: PetViewModel) {
                                                         }
                                                         Spacer(modifier = Modifier.weight(1f))
                                                     }
-                                                    // 数据行
                                                     Row(
                                                         modifier = Modifier
                                                             .widthIn(min = minRowWidth)
@@ -218,7 +212,6 @@ fun StatsScreen(viewModel: PetViewModel) {
                                                 }
                                             }
                                         } else {
-                                            // --- 竖屏：一体化块状布局 ---
                                             Column(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -231,7 +224,6 @@ fun StatsScreen(viewModel: PetViewModel) {
                                                             .fillMaxWidth()
                                                             .height(IntrinsicSize.Min)
                                                     ) {
-                                                        // 左侧标签柱
                                                         Box(
                                                             modifier = Modifier
                                                                 .weight(1f)
@@ -248,7 +240,6 @@ fun StatsScreen(viewModel: PetViewModel) {
                                                                 maxLines = 1
                                                             )
                                                         }
-                                                        // 右侧数值区
                                                         Box(
                                                             modifier = Modifier
                                                                 .weight(2.2f)
@@ -286,8 +277,7 @@ fun StatsScreen(viewModel: PetViewModel) {
                 Button(
                     onClick = {
                         if (!viewModel.supabaseConfig.value.isValid) {
-                            // 调用 ViewModel 发送重定向事件
-                            viewModel.syncAllFromCloud() // 该方法内部会自动触发 CONFIG_NEEDED
+                            viewModel.triggerConfigCheck() 
                         } else {
                             scope.launch {
                                 dialogTitle = "云端数据"
@@ -343,20 +333,26 @@ fun StatsScreen(viewModel: PetViewModel) {
 
         medications.forEach { med ->
             item(key = "med_${med.id}") {
-                val medLogs = medicationLogs.filter { it.medicationId == med.id }
+                // 关键修复：支持 ID 和名称双重匹配，处理老数据导入后的 ID 映射问题
+                val medLogs = medicationLogs.filter { it.medicationId == med.id || (it.medicationName == med.name && it.medicationName.isNotBlank()) }
                 FoldingStatCard("用药: ${med.name} (${med.unit})", R.drawable.ic_medicine, medLogs, "medication", MediumGreen)
             }
         }
 
         snacks.forEach { snack ->
             item(key = "snack_${snack.id}") {
-                val sLogs = snackLogs.filter { it.snackId == snack.id }
+                // 关键修复：支持 ID 和名称双重匹配
+                val sLogs = snackLogs.filter { it.snackId == snack.id || (it.snackName == snack.name && it.snackName.isNotBlank()) }
                 FoldingStatCard("零食: ${snack.name} (${snack.unit})", R.drawable.ic_snack, sLogs, "snack", DeepGreen)
             }
         }
 
         item {
             ActivityLogSection(activityLogs)
+        }
+
+        item {
+            SyncLogSection(syncLogs, pendingCount)
         }
         
         item { Spacer(modifier = Modifier.height(40.dp)) }
@@ -376,6 +372,7 @@ fun StatsScreen(viewModel: PetViewModel) {
                 item { FoldingStatCard("排便次数", R.drawable.ic_poop, excretionLogs.filter { it.type == ExcretionType.POOP }, "excretion", PoopColor.copy(alpha = 0.6f)) }
                 item { FoldingStatCard("排尿次数", R.drawable.ic_pee, excretionLogs.filter { it.type == ExcretionType.PEE }, "excretion", PeeColor.copy(alpha = 0.6f)) }
                 item { ActivityLogSection(activityLogs) }
+                item { SyncLogSection(syncLogs, pendingCount) }
             }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -387,7 +384,7 @@ fun StatsScreen(viewModel: PetViewModel) {
                         Button(
                             onClick = {
                                 if (!viewModel.supabaseConfig.value.isValid) {
-                                    viewModel.syncAllFromCloud()
+                                    viewModel.triggerConfigCheck()
                                 } else {
                                     scope.launch {
                                         dialogTitle = "云端数据"
@@ -420,13 +417,13 @@ fun StatsScreen(viewModel: PetViewModel) {
                 }
                 snacks.forEach { snack ->
                     item(key = "snack_${snack.id}") {
-                        val sLogs = snackLogs.filter { it.snackId == snack.id }
+                        val sLogs = snackLogs.filter { it.snackId == snack.id || (it.snackName == snack.name && it.snackName.isNotBlank()) }
                         FoldingStatCard("零食: ${snack.name}", R.drawable.ic_snack, sLogs, "snack", DeepGreen)
                     }
                 }
                 medications.forEach { med ->
                     item(key = "med_${med.id}") {
-                        val medLogs = medicationLogs.filter { it.medicationId == med.id }
+                        val medLogs = medicationLogs.filter { it.medicationId == med.id || (it.medicationName == med.name && it.medicationName.isNotBlank()) }
                         FoldingStatCard("用药: ${med.name}", R.drawable.ic_medicine, medLogs, "medication", MediumGreen)
                     }
                 }
@@ -446,7 +443,6 @@ fun StatsScreen(viewModel: PetViewModel) {
 @Composable
 fun ActivityLogSection(logs: List<ActivityLog>) {
     var expanded by remember { mutableStateOf(false) }
-    
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -465,7 +461,6 @@ fun ActivityLogSection(logs: List<ActivityLog>) {
                 }
                 Text(if (expanded) "收起" else "查看全部", fontSize = 12.sp, color = DeepGreen)
             }
-
             AnimatedVisibility(visible = expanded) {
                 Column(modifier = Modifier.padding(top = 12.dp)) {
                     if (logs.isEmpty()) {
@@ -527,9 +522,105 @@ fun ActivityLogSection(logs: List<ActivityLog>) {
 }
 
 @Composable
-fun FoldingStatCard(title: String, resId: Int, logs: List<Any>, type: String, barColor: Color) {
-    var expandedTab by remember { mutableIntStateOf(-1) } // -1 = folded, 0=W, 1=M, 2=Y
+fun SyncLogSection(logs: List<SyncLog>, pendingCount: Int) {
+    var isExpanded by remember { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Sync, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("同步记录", style = MaterialTheme.typography.titleSmall, color = Color.Gray)
+                    if (pendingCount > 0) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            color = Color.Red.copy(alpha = 0.1f),
+                            shape = CircleShape
+                        ) {
+                            Text(
+                                text = "待办:$pendingCount", 
+                                color = Color.Red, 
+                                fontSize = 10.sp, 
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                Text(if (isExpanded) "收起" else "查看反馈", fontSize = 12.sp, color = DeepGreen)
+            }
+            if (isExpanded) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    if (logs.isEmpty()) {
+                        Text("暂无同步记录", fontSize = 12.sp, color = Color.LightGray, modifier = Modifier.padding(vertical = 8.dp))
+                    } else {
+                        logs.forEach { log ->
+                            SyncLogItem(log)
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.LightGray.copy(alpha = 0.2f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
+@Composable
+fun SyncLogItem(log: SyncLog) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                text = "${log.operation} - ${log.tableName}",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (log.statusCode in 200..299) DeepGreen else Color.Red
+            )
+            Text(text = log.recordTime, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(text = "状态码: ${log.statusCode}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(text = "提交内容:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+        Surface(
+            color = Color.LightGray.copy(alpha = 0.1f),
+            shape = RoundedCornerShape(4.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = log.requestBody,
+                style = TextStyle(fontFamily = FontFamily.Monospace),
+                fontSize = 10.sp,
+                modifier = Modifier.padding(4.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(text = "响应内容:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+        Surface(
+            color = Color.LightGray.copy(alpha = 0.1f),
+            shape = RoundedCornerShape(4.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = log.responseBody,
+                style = TextStyle(fontFamily = FontFamily.Monospace),
+                fontSize = 10.sp,
+                modifier = Modifier.padding(4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun FoldingStatCard(title: String, resId: Int, logs: List<Any>, type: String, barColor: Color) {
+    var expandedTab by remember { mutableIntStateOf(-1) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -542,13 +633,11 @@ fun FoldingStatCard(title: String, resId: Int, logs: List<Any>, type: String, ba
                 Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color.Gray)
             }
             Spacer(modifier = Modifier.height(8.dp))
-            
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 StatSummaryItem("周", logs, type, 0, isSelected = expandedTab == 0) { expandedTab = if (expandedTab == 0) -1 else 0 }
                 StatSummaryItem("月", logs, type, 1, isSelected = expandedTab == 1) { expandedTab = if (expandedTab == 1) -1 else 1 }
                 StatSummaryItem("年", logs, type, 2, isSelected = expandedTab == 2) { expandedTab = if (expandedTab == 2) -1 else 2 }
             }
-
             AnimatedVisibility(visible = expandedTab != -1) {
                 Column {
                     Spacer(modifier = Modifier.height(16.dp))
@@ -564,25 +653,11 @@ fun FoldingStatCard(title: String, resId: Int, logs: List<Any>, type: String, ba
 
 @Composable
 fun RowScope.StatSummaryItem(label: String, logs: List<Any>, type: String, tabIndex: Int, isSelected: Boolean, onClick: () -> Unit) {
-    val summaryData = remember(logs, tabIndex) {
-        getAggregatedData(logs, tabIndex, type)
-    }
+    val summaryData = remember(logs, tabIndex) { getAggregatedData(logs, tabIndex, type) }
     val total = summaryData.data.sum()
     val nonZeroCount = summaryData.data.count { it > 0 }.toDouble().coerceAtLeast(1.0)
-    
-    val divisor = if (type == "weight") {
-        // 体重逻辑：按实际有记录的天数计算平均值
-        nonZeroCount
-    } else {
-        // 其他（饮食等）逻辑：周按7天，月按30天，年按有记录的月份
-        when(tabIndex) {
-            0 -> 7.0
-            1 -> 30.0
-            else -> nonZeroCount
-        }
-    }
+    val divisor = if (type == "weight") nonZeroCount else when(tabIndex) { 0 -> 7.0; 1 -> 30.0; else -> nonZeroCount }
     val avg = total / divisor
-
     Column(
         modifier = Modifier
             .weight(1f)
@@ -594,17 +669,12 @@ fun RowScope.StatSummaryItem(label: String, logs: List<Any>, type: String, tabIn
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = if (isSelected) DeepGreen else Color.Gray)
         Text(
-            text = if (type == "weight") "%.1f".format(logs.filterIsInstance<WeightLog>().lastOrNull()?.weight ?: 0f) 
-                   else "%.0f".format(total),
+            text = if (type == "weight") "%.1f".format(logs.filterIsInstance<WeightLog>().lastOrNull()?.weight ?: 0f) else "%.0f".format(total),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = Color.DarkGray
         )
-        Text(
-            text = if (tabIndex == 2) "月均:%.1f".format(avg) else "日均:%.1f".format(avg),
-            style = TextStyle(fontSize = 9.sp),
-            color = Color.Gray
-        )
+        Text(text = if (tabIndex == 2) "月均:%.1f".format(avg) else "日均:%.1f".format(avg), style = TextStyle(fontSize = 9.sp), color = Color.Gray)
     }
 }
 
@@ -612,20 +682,18 @@ fun getAggregatedData(logs: List<Any>, tabIndex: Int, type: String): ChartData {
     val data = mutableListOf<Double>()
     val labels = mutableListOf<String>()
     val now = Calendar.getInstance()
-
     when (tabIndex) {
-        0 -> { // 周 (7天)
+        0 -> {
             for (i in 6 downTo 0) {
                 val d = (now.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -i) }
                 val value = getValueForDate(logs, d, type)
-                // 体重逻辑：只显示有记录的日期。其他逻辑：保留所有日期以观察消耗趋势。
                 if (type != "weight" || value > 0) {
                     data.add(value)
                     labels.add(SimpleDateFormat("MM/dd", Locale.CHINA).format(d.time))
                 }
             }
         }
-        1 -> { // 月 (30天)
+        1 -> {
             for (i in 29 downTo 0) {
                 val d = (now.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -i) }
                 val value = getValueForDate(logs, d, type)
@@ -635,36 +703,19 @@ fun getAggregatedData(logs: List<Any>, tabIndex: Int, type: String): ChartData {
                 }
             }
         }
-        2 -> { // 年 (12个月)
+        2 -> {
             for (i in 11 downTo 0) {
                 val d = (now.clone() as Calendar).apply { add(Calendar.MONTH, -i) }
                 val year = d.get(Calendar.YEAR)
                 val month = d.get(Calendar.MONTH)
-                
                 val value = when (type) {
-                    "weight" -> logs.filterIsInstance<WeightLog>().filter { 
-                        val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }
-                        c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month
-                    }.lastOrNull()?.weight?.toDouble() ?: 0.0
-                    "consumption" -> logs.filterIsInstance<ConsumptionLog>().filter { 
-                        val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }
-                        c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month
-                    }.sumOf { -it.amount.toDouble() }
-                    "excretion" -> logs.filterIsInstance<ExcretionLog>().filter { 
-                        val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }
-                        c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month
-                    }.count().toDouble()
-                    "medication" -> logs.filterIsInstance<MedicationLog>().filter { 
-                        val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }
-                        c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month
-                    }.sumOf { it.dosage.toDouble() }
-                    "snack" -> logs.filterIsInstance<SnackLog>().filter { 
-                        val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }
-                        c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month
-                    }.sumOf { it.amount.toDouble() }
+                    "weight" -> logs.filterIsInstance<WeightLog>().filter { val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }; c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month }.lastOrNull()?.weight?.toDouble() ?: 0.0
+                    "consumption" -> logs.filterIsInstance<ConsumptionLog>().filter { val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }; c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month }.sumOf { -it.amount.toDouble() }
+                    "excretion" -> logs.filterIsInstance<ExcretionLog>().filter { val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }; c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month }.count().toDouble()
+                    "medication" -> logs.filterIsInstance<MedicationLog>().filter { val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }; c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month }.sumOf { it.dosage.toDouble() }
+                    "snack" -> logs.filterIsInstance<SnackLog>().filter { val c = Calendar.getInstance().apply { timeInMillis = it.timestamp }; c.get(Calendar.YEAR) == year && c.get(Calendar.MONTH) == month }.sumOf { it.amount.toDouble() }
                     else -> 0.0
                 }
-                // 年视图下，如果是体重，也只显示有记录的月份
                 if (type != "weight" || value > 0) {
                     data.add(value)
                     labels.add("${month + 1}月")
@@ -691,68 +742,27 @@ fun BarStatSection(title: String, chartData: ChartData, barColor: Color = ChartB
     val modelProducer = remember { CartesianChartModelProducer() }
     val data = chartData.data
     val labels = chartData.labels
-
-    LaunchedEffect(data) {
-        if (data.isNotEmpty()) {
-            modelProducer.runTransaction { 
-                columnModel { series(data) }
-            }
-        }
-    }
-
-    val customRangeProvider = remember(data) {
-        object : com.patrykandpatrick.vico.compose.cartesian.data.CartesianLayerRangeProvider {
-            override fun getMaxY(minY: Double, maxY: Double, extraStore: ExtraStore): Double =
-                (if (minY == 0.0 && maxY == 0.0) 1.0 else maxY) * 1.3
-        }
-    }
-
+    LaunchedEffect(data) { if (data.isNotEmpty()) { modelProducer.runTransaction { columnModel { series(data) } } } }
+    val customRangeProvider = remember(data) { object : com.patrykandpatrick.vico.compose.cartesian.data.CartesianLayerRangeProvider { override fun getMaxY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = (if (minY == 0.0 && maxY == 0.0) 1.0 else maxY) * 1.3 } }
     Column {
-        if (title.isNotEmpty()) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-            Spacer(modifier = Modifier.height(8.dp))
-        }
+        if (title.isNotEmpty()) { Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.DarkGray); Spacer(modifier = Modifier.height(8.dp)) }
         if (data.any { it > 0 }) {
             CartesianChartHost(
                 chart = rememberCartesianChart(
                     rememberColumnCartesianLayer(
-                        columnProvider = ColumnCartesianLayer.ColumnProvider.series(
-                            rememberLineComponent(
-                                fill = Fill(barColor),
-                                thickness = 10.dp,
-                                shape = RoundedCornerShape(topStartPercent = 8, topEndPercent = 8)
-                            )
-                        ),
-                        dataLabel = rememberTextComponent(
-                            style = TextStyle(color = Color.DarkGray, fontSize = 9.sp),
-                            margins = Insets(bottom = 4.dp) // Reset to smaller margin, let position handle it
-                        ),
+                        columnProvider = ColumnCartesianLayer.ColumnProvider.series(rememberLineComponent(fill = Fill(barColor), thickness = 10.dp, shape = RoundedCornerShape(topStartPercent = 8, topEndPercent = 8))),
+                        dataLabel = rememberTextComponent(style = TextStyle(color = Color.DarkGray, fontSize = 9.sp), margins = Insets(bottom = 4.dp)),
                         dataLabelPosition = Position.Vertical.Top,
-                        dataLabelValueFormatter = { _, value, _ -> 
-                            if (value >= 100) "%.0f".format(value) else "%.1f".format(value) 
-                        },
+                        dataLabelValueFormatter = { _, value, _ -> if (value >= 100) "%.0f".format(value) else "%.1f".format(value) },
                         rangeProvider = customRangeProvider
                     ),
-                    startAxis = VerticalAxis.rememberStart(
-                        label = null, 
-                        line = null,
-                        tick = null,
-                        guideline = null
-                    ),
-                    bottomAxis = HorizontalAxis.rememberBottom(
-                        label = rememberTextComponent(style = TextStyle(fontSize = 9.sp), margins = Insets(top = 4.dp)),
-                        valueFormatter = { _, value, _ -> labels.getOrNull(value.toInt()) ?: value.toInt().toString() },
-                        guideline = null
-                    )
+                    startAxis = VerticalAxis.rememberStart(label = null, line = null, tick = null, guideline = null),
+                    bottomAxis = HorizontalAxis.rememberBottom(label = rememberTextComponent(style = TextStyle(fontSize = 9.sp), margins = Insets(top = 4.dp)), valueFormatter = { _, value, _ -> labels.getOrNull(value.toInt()) ?: value.toInt().toString() }, guideline = null)
                 ),
                 modelProducer = modelProducer,
-                modifier = Modifier.height(130.dp).fillMaxWidth() // 稍微增加总高度给文字留位
+                modifier = Modifier.height(130.dp).fillMaxWidth()
             )
-        } else {
-            Box(modifier = Modifier.height(60.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("暂无数据", color = Color.LightGray, fontSize = 12.sp)
-            }
-        }
+        } else { Box(modifier = Modifier.height(60.dp).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("暂无数据", color = Color.LightGray, fontSize = 12.sp) } }
     }
 }
 
@@ -761,12 +771,7 @@ fun LastExcretionInfo(logs: List<ExcretionLog>) {
     val lastPoop = logs.find { it.type == ExcretionType.POOP }?.timestamp
     val lastPee = logs.find { it.type == ExcretionType.PEE }?.timestamp
     val now = System.currentTimeMillis()
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
             InfoColumn("距离上次拉屎", lastPoop, now, PoopColor)
             VerticalDivider(modifier = Modifier.height(40.dp), color = BgGreen)
@@ -779,12 +784,7 @@ fun LastExcretionInfo(logs: List<ExcretionLog>) {
 fun InfoColumn(label: String, timestamp: Long?, now: Long, color: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = Color.Gray)
-        val diffText = if (timestamp == null) "无记录" else {
-            val diff = now - timestamp
-            val hours = TimeUnit.MILLISECONDS.toHours(diff)
-            val minutes = TimeUnit.MILLISECONDS.toMinutes(diff) % 60
-            if (hours > 24) "${hours / 24}天 ${hours % 24}时" else "${hours}时 ${minutes}分"
-        }
+        val diffText = if (timestamp == null) "无记录" else { val diff = now - timestamp; val hours = TimeUnit.MILLISECONDS.toHours(diff); val minutes = TimeUnit.MILLISECONDS.toMinutes(diff) % 60; if (hours > 24) "${hours / 24}天 ${hours % 24}时" else "${hours}时 ${minutes}分" }
         Text(diffText, style = MaterialTheme.typography.titleLarge, color = color, fontWeight = FontWeight.Bold)
     }
 }

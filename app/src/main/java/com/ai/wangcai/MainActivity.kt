@@ -38,6 +38,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.ai.wangcai.ui.DashboardScreen
 import com.ai.wangcai.ui.DeepGreen
+import com.ai.wangcai.ui.SelectAllOutlinedTextField
 import com.ai.wangcai.ui.StatsScreen
 import com.ai.wangcai.ui.SupabaseManagerScreen
 import com.ai.wangcai.util.BackupWorker
@@ -47,12 +48,21 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 import android.content.ClipData
+import android.os.Environment
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Ensure /Download/WangCai directory exists
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val wangCaiDir = File(downloadsDir, "WangCai")
+        if (!wangCaiDir.exists()) {
+            wangCaiDir.mkdirs()
+        }
+
         // Schedule Auto-Backup
         val backupRequest = PeriodicWorkRequestBuilder<BackupWorker>(2, TimeUnit.HOURS).build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
@@ -283,7 +293,7 @@ fun GlobalSupabaseConfigDialog(viewModel: PetViewModel, onDismiss: () -> Unit) {
                     }
                 }
                 // 重要：不要在 TextField 外面包裹 SelectionContainer，防止小米系统长按闪退
-                OutlinedTextField(
+                SelectAllOutlinedTextField(
                     value = rawText, 
                     onValueChange = { rawText = it; parseError = false }, 
                     placeholder = { Text("SUPABASE_URL=...\nSUPABASE_PUBLISHABLE_KEY=...") },

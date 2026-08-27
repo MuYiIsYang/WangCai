@@ -4,67 +4,57 @@
 
 ---
 
-## 一、 文件系统索引与职责说明
+## 一、 核心架构：UUID 分布式同步
 
-### 1. 核心控制层 (Entry Points)
-- [**MainActivity.kt**](file:///app/src/main/java/com/ai/wangcai/MainActivity.kt)
-    - **职责**：应用入口，初始化边缘到边缘 (Edge-to-Edge) 布局，配置 WorkManager 自动备份。
-    - **逻辑**：管理全局弹窗状态（如 Supabase 配置弹窗），通过 `Configuration` 监听设备旋转并决定导航模式（底部栏 vs 侧边栏）。
+项目从版本 22 开始全面采用 **UUID 字符串主键架构**，并引入了强一致性校验机制。
 
-### 2. UI 展现层 (UI Layer)
-- [**DashboardScreen.kt**](file:///app/src/main/java/com/ai/wangcai/ui/DashboardScreen.kt)
-    - **职责**：核心交互 hub。包含自定义日历和每日详情视图。
-    - **布局设计**：采用“双卡片”纵向堆叠（竖屏）或左右切分（横屏）。引入了 `DaySummaryPopover`，利用 `onGloballyPositioned` 获取坐标实现精准的悬浮气泡定位。
-- [**StatsScreen.kt**](file:///app/src/main/java/com/ai/wangcai/ui/StatsScreen.kt)
-    - **职责**：数据可视化中心。
-    - **功能**：通过 Vico 框架渲染统计图表。内置“数据查阅表”，支持在大弹窗中以网格（横屏）或块状列表（竖屏）形式审计本地/云端原始数据。
-- [**SupabaseManagerScreen.kt**](file:///app/src/main/java/com/ai/wangcai/ui/SupabaseManagerScreen.kt)
-    - **职责**：高级调试页面。
-    - **功能**：直接连接云端数据库，允许开发者手动增删改查所有同步表，用于调试同步逻辑。
+### 1. 为什么使用 UUID？
+在多设备同步场景下，UUID (通用唯一识别码) 保证了全球范围内的随机唯一性。手机在离线状态下生成的 ID 即为最终 ID，同步时无需云端再分配，彻底消除了 ID 冲突。
 
-### 3. 业务逻辑层 (ViewModel & Business Logic)
-- [**PetViewModel.kt**](file:///app/src/main/java/com/ai/wangcai/viewmodel/PetViewModel.kt)
-    - **职责**：数据“指挥官”。
-    - **功能**：封装所有数据库操作。核心逻辑包括：摄入插值计算、云端增量同步算法、操作日志录入逻辑。
+### 2. 同步流程：本地主权模式 (Local-Master)
+1. **数据创建**：由构造函数自动分配 `UUID.randomUUID().toString()`。
+2. **本地先行**：数据立即存入 Room 数据库，状态标记为 `isSynced = false`。
+3. **异步 Upsert**：带着生成的 UUID 直接向 Supabase 发起请求。系统强制执行 **“中文 Key 白名单”** 过滤，确保发出的 JSON 仅包含云端定义的字段（如“变动数值”、“记录时间”），物理隔离本地控制字段。
 
-### 4. 数据持久化与网络 (Data Layer)
-- [**Entities.kt**](file:///app/src/main/java/com/ai/wangcai/data/Entities.kt)
-    - **职责**：定义所有数据库表模型，配置 `kotlinx.serialization` 的序列化别名（用于对齐 Supabase 表字段）。
-- [**PetDao.kt**](file:///app/src/main/java/com/ai/wangcai/data/PetDao.kt)
-    - **职责**：定义 Room SQL 查询，支持多表关联聚合。
-- [**SupabaseRepository.kt**](file:///app/src/main/java/com/ai/wangcai/data/SupabaseRepository.kt)
-    - **职责**：网络抽象层。基于 Ktor 实现 RESTful 请求，处理与 Supabase 的安全鉴权头（Bearer Auth）。
-
-### 5. 工具类 (Utilities)
-- [**ExcelManager.kt**](file:///app/src/main/java/com/ai/wangcai/util/ExcelManager.kt)
-    - **职责**：Excel 处理中心。通过 Apache POI 读写 `.xlsx` 文件，处理复杂的 ClassLoader 切换逻辑以确保 POI 在 Android 上的稳定性。
-- [**BackupWorker.kt**](file:///app/src/main/java/com/ai/wangcai/util/BackupWorker.kt)
-    - **职责**：静默任务实现。在每日特定的时间窗口（早/晚）自动执行数据导出。
-- [**TranslationHelper.kt**](file:///app/src/main/java/com/ai/wangcai/util/TranslationHelper.kt)
-    - **职责**：名称映射器。负责将数据库原始表/列名翻译为用户友好的中文，或在 UI 展示时进行转换。
+### 3. 鲁棒性设计：并发锁与直连校验
+- **并发互斥锁 (Mutex)**：ViewModel 层对基础数据表（食具、药品、零食库）的操作加锁。防止短时间内多次点击产生的竞争条件。
+- **直连数据库 (Direct DB Lookup)**：同步和计算逻辑不再依赖内存中的 `StateFlow` 缓存，而是直接从数据库读取。这解决了 App 启动瞬间数据未就绪导致的同步“跳过”问题。
 
 ---
 
-## 二、 关键布局与交互设计
+## 二、 UI 组件与交互逻辑
 
-### 1. 响应式布局策略
-系统通过 `LocalConfiguration.current.orientation` 实现真正的响应式设计：
-- **竖屏 (Portrait)**：顶部日历占 3/5 空间，下方详情占 2/5。操作按钮通过悬浮 FAB 菜单展示。
-- **横屏 (Landscape)**：利用 `NavigationRail` 替换底部导航栏，主体内容采用左右分栏，提升平板或横屏手机的利用率。
+### 1. 增强型输入组件：`SelectAllOutlinedTextField`
+为了提升录入效率，项目封装了该组件。
+- **功能**：当输入框获得焦点时（点击或自动聚焦），系统自动选中所有内容。
+- **效果**：用户点击后可直接输入新值覆盖旧值，无需手动长按或点击删除。
 
-### 2. 悬浮点触逻辑 (Popover)
-在日历视图中，点击特定日期会触发 `DaySummaryPopover`。该组件不使用标准的 `AlertDialog`，而是基于 `Box` 和绝对坐标偏移实现的自定义气泡，能够完美跟随点击位置弹出，并自动处理屏幕边缘检测。
+### 2. 实时时钟校准
+首页（Dashboard）开启了后台定时任务（每5秒执行一次）。
+- **逻辑**：当选中的是“今天”时，App 会自动校准内部毫秒数。
+- **意义**：确保用户长时间开启 App 后，点击“添加”记录时，默认时间戳永远是实时的，而非软件启动瞬间的时间。
 
-### 3. 操作记录 (Activity Logs)
-每一笔数据的增删改都会在 `activity_logs` 表中生成流水，并在统计页的“操作记录”卡片中实时展示。这不仅是为了记录，也为未来的“撤回/回滚”功能奠定了基础。
-
----
-
-## 三、 维护与扩展建议
-
-1. **混淆配置**：项目依赖 Apache POI，发布版本必须严格执行 [**rules.keep**](file:///app/src/main/keepRules/rules.keep) 中的规则，否则 POI 核心库及序列化类会被过度混淆导致逻辑崩溃。
-2. **环境连接**：Supabase 的 `service_role` 权限极高，建议在发布正式版前通过配置文件而非硬编码管理密钥。
-3. **小米兼容性补丁**：UI 录入组件（`OutlinedTextField`）外层不可包裹 `SelectionContainer`，以规避某些 MIUI 版本在处理系统剪贴板时的致命崩溃。
+### 3. 响应式布局与 Popover
+- **双卡片设计**：日历区与详情区采用 3:2 的黄金比例，支持横竖屏无缝切换。
+- **精准气泡 (Popover)**：利用 `onGloballyPositioned` 获取坐标，实现气泡完美跟随点击位置。
 
 ---
-*文档版本：V2.9 (2026-08-25)*
+
+## 三、 文件职责索引
+
+| 目录/文件 | 职责 |
+| :--- | :--- |
+| `data/Entities.kt` | 定义 UUID 模型，处理 ISO 8601 时间序列化。 |
+| `data/PetDao.kt` | 提供 UUID 级精确索引查询。 |
+| `ui/CommonComponents.kt` | 存放全屏通用的 UI 组件（如全选输入框）。 |
+| `util/ExcelManager.kt` | 处理 Excel 导入导出，**具备旧版数字 ID 自动修复能力**。 |
+| `util/TranslationHelper.kt` | 维护中英文字段映射，是同步清洗逻辑的基准。 |
+
+---
+## 四、 维护建议
+
+1. **混淆配置**：发布版本必须保留 `rules.keep`，以防 Apache POI 和序列化逻辑失效。
+2. **数据库升级**：从版本 22 开始，系统移除了对旧版（v21 以前）数字主键的自动迁移支持。新架构以 UUID 为唯一准则。后续版本演进需在 `DatabaseMigrations.kt` 中按序注册新逻辑，并在 `PetDatabase` 中通过 `.addMigrations()` 加载。
+
+---
+*文档版本：V3.1 (2026-08-27)*

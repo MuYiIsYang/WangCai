@@ -5,31 +5,46 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ai.wangcai.data.*
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.ai.wangcai.util.TranslationHelper
 import java.util.Calendar
+import kotlinx.serialization.json.*
 
 class PetViewModel(application: Application) : AndroidViewModel(application) {
     private val db = PetDatabase.getDatabase(application)
     private val dao = db.petDao()
     private val supabase = SupabaseRepository()
 
+    private val prefs = application.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+    private val supabasePrefs = application.getSharedPreferences("supabase_prefs", android.content.Context.MODE_PRIVATE)
+
     private val _redirectionEvent = MutableSharedFlow<String>()
     val redirectionEvent = _redirectionEvent.asSharedFlow()
 
-    init {
-        // 初始同步配置到 repository
-        val initialConfig = SupabaseConfig(
-            url = application.getSharedPreferences("supabase_prefs", android.content.Context.MODE_PRIVATE).getString("url", "") ?: "",
-            publishableKey = application.getSharedPreferences("supabase_prefs", android.content.Context.MODE_PRIVATE).getString("publishable_key", "") ?: "",
-            secretKey = application.getSharedPreferences("supabase_prefs", android.content.Context.MODE_PRIVATE).getString("secret_key", "") ?: "",
-            jwksUrl = application.getSharedPreferences("supabase_prefs", android.content.Context.MODE_PRIVATE).getString("jwks_url", "") ?: ""
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing = _isSyncing.asStateFlow()
+
+    private val _supabaseConfig = MutableStateFlow(
+        SupabaseConfig(
+            url = supabasePrefs?.getString("url", "") ?: "",
+            publishableKey = supabasePrefs?.getString("publishable_key", "") ?: "",
+            secretKey = supabasePrefs?.getString("secret_key", "") ?: "",
+            jwksUrl = supabasePrefs?.getString("jwks_url", "") ?: ""
         )
-        supabase.updateConfig(initialConfig)
-    }
+    )
+    val supabaseConfig = _supabaseConfig.asStateFlow()
+
+    private val _pendingConfirmRequest = MutableStateFlow<PendingConfirmRequest?>(null)
+    val pendingConfirmRequest = _pendingConfirmRequest.asStateFlow()
+
+    // 互斥锁，防止并发操作导致的基础表（食具、药品、零食）重复
+    private val baseDataMutex = Mutex()
 
     val allBowls = dao.getAllBowls().stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
     val foodBowl = dao.getBowlByType(BowlType.FOOD).stateIn(viewModelScope, SharingStarted.Lazily, null)
@@ -47,198 +62,214 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
     val snackLogs = dao.getSnackLogs().stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
     
     val activityLogs = dao.getAllActivityLogs().stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    val syncLogs = dao.getRecentSyncLogs().stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
     val petProfile = dao.getPetProfile().stateIn(viewModelScope, SharingStarted.Lazily, null)
+    val pendingTasksCount = dao.getPendingTasksCount().stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
-    private val prefs = application.getSharedPreferences("supabase_prefs", android.content.Context.MODE_PRIVATE)
-    
-    private val _supabaseConfig = MutableStateFlow(
-        SupabaseConfig(
-            url = prefs.getString("url", "") ?: "",
-            publishableKey = prefs.getString("publishable_key", "") ?: "",
-            secretKey = prefs.getString("secret_key", "") ?: "",
-            jwksUrl = prefs.getString("jwks_url", "") ?: ""
+    data class PendingConfirmRequest(val message: String, val onResolve: (Boolean) -> Unit)
+
+    init {
+        val initialConfig = SupabaseConfig(
+            url = supabasePrefs?.getString("url", "") ?: "",
+            publishableKey = supabasePrefs?.getString("publishable_key", "") ?: "",
+            secretKey = supabasePrefs?.getString("secret_key", "") ?: "",
+            jwksUrl = supabasePrefs?.getString("jwks_url", "") ?: ""
         )
-    )
-    val supabaseConfig = _supabaseConfig.asStateFlow()
+        supabase.updateConfig(initialConfig)
+        viewModelScope.launch(Dispatchers.IO) { 
+            cleanupDuplicateBowls() // 启动时清理由于旧 Bug 产生的重复食具
+            processPendingTasks() 
+        }
+    }
+
+    private suspend fun cleanupDuplicateBowls() {
+        val allBowls = dao.getAllBowlsDirect()
+        // 按类型分组，如果某组数量 > 1，则保留第一个，删除其余
+        allBowls.groupBy { it.type }.forEach { (type, list) ->
+            if (list.size > 1) {
+                Log.w("SupabaseSync", "Found duplicate bowls for type $type: ${list.size}")
+                val keep = list.first()
+                list.drop(1).forEach { redundant ->
+                    dao.deleteBowlById(redundant.id)
+                    // 同时尝试从云端抹除冗余 ID
+                    if (isCloudSyncEnabled()) {
+                        supabase.deleteData("食具配置", redundant.id)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun processPendingTasks() {
+        if (!isCloudSyncEnabled() || !supabaseConfig.value.isValid) return
+        val tasks = dao.getAllPendingTasks()
+        if (tasks.isEmpty()) return
+        Log.d("SupabaseSync", "Processing ${tasks.size} pending tasks...")
+        tasks.forEach { task ->
+            val res = when(task.operation) {
+                "DELETE" -> supabase.deleteData(task.tableName, task.recordId)
+                else -> {
+                    val item = getLocalRecordDirect(task.tableName, task.recordId)
+                    if (item != null) supabase.upsertData(task.tableName, item) 
+                    else SupabaseRepository.NetworkResult(true, 200, "Record no longer exists", "SKIP")
+                }
+            }
+            if (res.isSuccess) {
+                dao.removePendingTask(task.tableName, task.recordId, task.operation)
+                if (task.operation != "DELETE") markRecordAsSynced(task.tableName, task.recordId)
+                updateSyncLogToSuccess(task.tableName, task.recordId, res)
+            }
+        }
+    }
+
+    private suspend fun getLocalRecordDirect(tableName: String, id: String): Any? {
+        return when(tableName) {
+            "饮食饮水记录" -> dao.getConsumptionLogById(id); "体重记录" -> dao.getWeightLogById(id); "用药打卡记录" -> dao.getMedicationLogById(id); "拉撒记录" -> dao.getExcretionLogById(id); "零食打卡记录" -> dao.getSnackLogById(id); "食具配置" -> dao.getBowlById(id); "药品库" -> dao.getMedicationById(id); "零食库" -> dao.getSnackById(id); "宠物档案" -> dao.getPetProfile().first()?.takeIf { it.id == id }; else -> null
+        }
+    }
+
+    private suspend fun updateSyncLogToSuccess(tableName: String, recordId: String, res: SupabaseRepository.NetworkResult) {
+        val lastLog = dao.getLatestSyncLogForRecord(tableName, recordId)
+        if (lastLog != null) {
+            dao.updateSyncLog(lastLog.copy(operation = "${lastLog.operation} (已补传成功)", responseBody = res.responseBody, statusCode = res.statusCode, timestamp = System.currentTimeMillis(), recordTime = System.currentTimeMillis().toDbTime()))
+        } else if (res.responseBody != "SKIP") {
+            addSyncLog(tableName, "UPSERT (补传)", recordId, res)
+        }
+    }
+
+    private fun isCloudSyncEnabled(): Boolean = prefs?.getBoolean("cloud_sync_enabled", true) ?: true
+
+    private suspend fun markRecordAsSynced(tableName: String, id: String) {
+        val record = getLocalRecordDirect(tableName, id) ?: return
+        when(record) {
+            is ConsumptionLog -> dao.updateConsumptionLog(record.copy(isSynced = true)); is WeightLog -> dao.updateWeightLog(record.copy(isSynced = true)); is MedicationLog -> dao.updateMedicationLog(record.copy(isSynced = true)); is ExcretionLog -> dao.updateExcretionLog(record.copy(isSynced = true)); is SnackLog -> dao.updateSnackLog(record.copy(isSynced = true)); is Medication -> dao.insertMedication(record.copy(isSynced = true)); is Snack -> dao.insertSnack(record.copy(isSynced = true)); is Bowl -> dao.insertBowl(record.copy(isSynced = true)); is PetProfile -> dao.insertPetProfile(record.copy(isSynced = true))
+        }
+    }
+
+    private suspend fun handleSyncDecision(tableName: String, op: String, record: Any): String {
+        val id = when(record) {
+            is ConsumptionLog -> record.id; is WeightLog -> record.id; is MedicationLog -> record.id; is ExcretionLog -> record.id; is SnackLog -> record.id; is Medication -> record.id; is Snack -> record.id; is Bowl -> record.id; is PetProfile -> record.id; else -> ""
+        }
+        insertLocalRecord(tableName, record, false)
+        if (!isCloudSyncEnabled() || !supabaseConfig.value.isValid) { markRecordAsSynced(tableName, id); return id }
+        val res = supabase.upsertData(tableName, record)
+        addSyncLog(tableName, op, id, res)
+        if (res.isSuccess) markRecordAsSynced(tableName, id)
+        else {
+            val deferred = CompletableDeferred<Boolean>()
+            _pendingConfirmRequest.value = PendingConfirmRequest("云端同步失败，是否加入待办？") { add -> _pendingConfirmRequest.value = null; deferred.complete(add) }
+            if (deferred.await()) { dao.clearSuccessfulSyncLogs(); dao.insertPendingTask(PendingSyncTask(tableName = tableName, operation = op, recordId = id)) }
+            else markRecordAsSynced(tableName, id)
+        }
+        return id
+    }
+
+    private suspend fun insertLocalRecord(tableName: String, record: Any, isSynced: Boolean) {
+        when(record) {
+            is ConsumptionLog -> dao.insertConsumptionLog(record.copy(isSynced = isSynced)); is WeightLog -> dao.insertWeightLog(record.copy(isSynced = isSynced)); is MedicationLog -> dao.insertMedicationLog(record.copy(isSynced = isSynced)); is ExcretionLog -> dao.insertExcretionLog(record.copy(isSynced = isSynced)); is SnackLog -> dao.insertSnackLog(record.copy(isSynced = isSynced)); is Medication -> dao.insertMedication(record.copy(isSynced = isSynced)); is Snack -> dao.insertSnack(record.copy(isSynced = isSynced)); is Bowl -> dao.insertBowl(record.copy(isSynced = isSynced)); is PetProfile -> dao.insertPetProfile(record.copy(isSynced = isSynced))
+        }
+    }
+
+    private suspend fun handleUpdateDeleteSync(tableName: String, op: String, recordId: String, syncCall: suspend () -> SupabaseRepository.NetworkResult, onSuccess: suspend () -> Unit) {
+        if (!isCloudSyncEnabled() || !supabaseConfig.value.isValid) { onSuccess(); return }
+        val res = syncCall()
+        addSyncLog(tableName, op, recordId, res)
+        if (res.isSuccess) onSuccess() 
+        else {
+            val deferred = CompletableDeferred<Boolean>()
+            _pendingConfirmRequest.value = PendingConfirmRequest("同步失败，是否加入待办？") { add -> _pendingConfirmRequest.value = null; deferred.complete(add) }
+            if (deferred.await()) { dao.clearSuccessfulSyncLogs(); dao.insertPendingTask(PendingSyncTask(tableName = tableName, operation = op, recordId = recordId)) }
+            else onSuccess()
+        }
+    }
 
     fun updateSupabaseConfig(config: SupabaseConfig) {
         _supabaseConfig.value = config
-        prefs.edit()
-            .putString("url", config.url)
-            .putString("publishable_key", config.publishableKey)
-            .putString("secret_key", config.secretKey)
-            .putString("jwks_url", config.jwksUrl)
-            .apply()
-        // 更新 repository 配置
+        supabasePrefs?.edit()?.apply { putString("url", config.url); putString("publishable_key", config.publishableKey); putString("secret_key", config.secretKey); putString("jwks_url", config.jwksUrl); apply() }
         supabase.updateConfig(config)
     }
 
-    fun clearSupabaseConfig() {
-        updateSupabaseConfig(SupabaseConfig())
-    }
+    fun clearSupabaseConfig() { updateSupabaseConfig(SupabaseConfig()) }
 
     fun parseAndSaveConfig(rawText: String): Boolean {
         try {
             val lines = rawText.lines()
-            var url = ""
-            var pKey = ""
-            var sKey = ""
-            var jwks = ""
-            
+            var u = ""; var p = ""; var s = ""; var j = ""
             lines.forEach { line ->
-                val trimmed = line.trim()
-                when {
-                    trimmed.startsWith("SUPABASE_URL=") -> url = trimmed.substringAfter("=").trim()
-                    trimmed.startsWith("SUPABASE_PUBLISHABLE_KEY=") -> pKey = trimmed.substringAfter("=").trim()
-                    trimmed.startsWith("SUPABASE_SECRET_KEY=") -> sKey = trimmed.substringAfter("=").trim()
-                    trimmed.startsWith("SUPABASE_JWKS_URL=") -> jwks = trimmed.substringAfter("=").trim()
-                }
+                val t = line.trim()
+                when { t.startsWith("SUPABASE_URL=") -> u = t.substringAfter("=").trim(); t.startsWith("SUPABASE_PUBLISHABLE_KEY=") -> p = t.substringAfter("=").trim(); t.startsWith("SUPABASE_SECRET_KEY=") -> s = t.substringAfter("=").trim(); t.startsWith("SUPABASE_JWKS_URL=") -> j = t.substringAfter("=").trim() }
             }
-            
-            if (url.isNotBlank() && pKey.isNotBlank() && sKey.isNotBlank()) {
-                updateSupabaseConfig(SupabaseConfig(url, pKey, sKey, jwks))
-                return true
-            }
-        } catch (e: Exception) {
-            Log.e("ConfigParse", "Failed to parse: ${e.message}")
-        }
+            if (u.isNotBlank() && p.isNotBlank() && s.isNotBlank()) { updateSupabaseConfig(SupabaseConfig(u, p, s, j)); return true }
+        } catch (e: Exception) { Log.e("ConfigParse", "Failed: ${e.message}") }
         return false
     }
 
-    private val _isSyncing = MutableStateFlow(false)
-    val isSyncing = _isSyncing.asStateFlow()
-
-    // 【手动下载】从云端同步全量数据到本地
-    fun syncAllFromCloud() {
-        if (!supabaseConfig.value.isValid) {
-            triggerRedirection("CONFIG_NEEDED")
-            return
-        }
+    fun syncFromCloud(syncAll: Boolean, targetDate: Calendar) {
+        if (!supabaseConfig.value.isValid) { triggerRedirection("CONFIG_NEEDED"); return }
         viewModelScope.launch(Dispatchers.IO) {
             _isSyncing.value = true
             try {
-                supabase.fetchTableData<PetProfile>("宠物档案").forEach { 
-                    dao.insertPetProfile(it.copy(timestamp = it.createdAt.toTimestamp(), isSynced = true))
+                val pendingTasks = dao.getAllPendingTasks()
+                val filter = if (syncAll) null else {
+                    val start = (targetDate.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, 1); set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }
+                    val end = (start.clone() as Calendar).apply { add(Calendar.MONTH, 1) }
+                    "记录时间=gte.\"${start.timeInMillis.toDbTime()}\"&记录时间=lt.\"${end.timeInMillis.toDbTime()}\""
                 }
+                supabase.fetchTableData<PetProfile>("宠物档案").forEach { dao.insertPetProfile(it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true)) }
                 supabase.fetchTableData<Medication>("药品库").forEach { dao.insertMedication(it.copy(isSynced = true)) }
-                supabase.fetchTableData<MedicationLog>("药品打卡记录").forEach { 
-                    dao.insertMedicationLog(it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true)) 
-                }
                 supabase.fetchTableData<Snack>("零食库").forEach { dao.insertSnack(it.copy(isSynced = true)) }
-                supabase.fetchTableData<SnackLog>("零食打卡记录").forEach { 
-                    dao.insertSnackLog(it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true)) 
-                }
-                supabase.fetchTableData<Bowl>("食具配置").forEach { 
-                    val type = if (it.name.contains("水")) BowlType.WATER else BowlType.FOOD
-                    dao.insertBowl(it.copy(type = type, isSynced = true)) 
-                }
-                supabase.fetchTableData<ConsumptionLog>("饮食饮水记录").forEach { 
-                    val fixed = it.copy(
-                        timestamp = it.recordTime.toTimestamp(),
-                        isSynced = true,
-                        type = when(it.action) {
-                            "增加" -> ConsumptionType.ADD
-                            "减少" -> ConsumptionType.EAT
-                            else -> ConsumptionType.CLEAR
-                        },
-                        bowlType = when(it.method) {
-                            "添加饮食", "吃吃" -> BowlType.FOOD
-                            "添加饮水", "喝喝" -> BowlType.WATER
-                            else -> BowlType.FOOD
-                        }
-                    )
-                    dao.insertConsumptionLog(fixed) 
-                }
-                supabase.fetchTableData<WeightLog>("体重记录").forEach { 
-                    dao.insertWeightLog(it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true)) 
-                }
-                supabase.fetchTableData<ExcretionLog>("拉撒记录").forEach { 
-                    dao.insertExcretionLog(it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true)) 
-                }
-
-                addActivityLog("SYNC", "Cloud", "Manual full download completed")
-            } catch (e: Exception) {
-                Log.e("SyncError", "Download failed: ${e.localizedMessage}")
-            } finally {
-                _isSyncing.value = false
-            }
+                supabase.fetchTableData<Bowl>("食具配置").forEach { dao.insertBowl(it.copy(type = if (it.name.contains("水")) BowlType.WATER else BowlType.FOOD, isSynced = true)) }
+                downloadTable<MedicationLog>("用药打卡记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
+                downloadTable<SnackLog>("零食打卡记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
+                downloadTable<ConsumptionLog>("饮食饮水记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true, type = if(it.action=="增加") ConsumptionType.ADD else ConsumptionType.EAT, bowlType = if (it.method.contains("水")) BowlType.WATER else BowlType.FOOD) }
+                downloadTable<WeightLog>("体重记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
+                downloadTable<ExcretionLog>("拉撒记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
+                addActivityLog("SYNC", "Cloud", "Download complete")
+            } catch (e: Exception) { Log.e("SyncError", "Download failed: ${e.message}") } finally { _isSyncing.value = false }
         }
     }
 
-    // 【手动上传】将本地尚未同步成功的记录批量上传到云端
-    fun syncAllToCloud() {
-        if (!supabaseConfig.value.isValid) {
-            triggerRedirection("CONFIG_NEEDED")
-            return
+    private suspend inline fun <reified T : Any> downloadTable(tableName: String, filter: String?, pendingTasks: List<PendingSyncTask>, crossinline fix: (T) -> T) {
+        val data = supabase.fetchTableData<T>(tableName, filter) 
+        data.forEach { item ->
+            val fixed = fix(item)
+            val id = when(fixed) { is MedicationLog -> fixed.id; is SnackLog -> fixed.id; is ConsumptionLog -> fixed.id; is WeightLog -> fixed.id; is ExcretionLog -> fixed.id; else -> "" }
+            if (pendingTasks.any { t -> t.tableName == tableName && t.recordId == id && t.operation == "DELETE" }) return@forEach
+            when(fixed) { is MedicationLog -> dao.insertMedicationLog(fixed); is SnackLog -> dao.insertSnackLog(fixed); is ConsumptionLog -> dao.insertConsumptionLog(fixed); is WeightLog -> dao.insertWeightLog(fixed); is ExcretionLog -> dao.insertExcretionLog(fixed) }
         }
+    }
+
+    fun syncToCloud(syncAll: Boolean, targetDate: Calendar) {
+        if (!supabaseConfig.value.isValid) { triggerRedirection("CONFIG_NEEDED"); return }
         viewModelScope.launch(Dispatchers.IO) {
             _isSyncing.value = true
             try {
-                // 1. 宠物档案
-                petProfile.value?.let { profile ->
-                    if (!profile.isSynced) {
-                        supabase.upsertData("宠物档案", profile)
-                        dao.updatePetProfile(profile.copy(isSynced = true))
-                    }
-                }
+                processPendingTasks()
+                val startTs = if (syncAll) 0L else (targetDate.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, 1); set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+                val endTs = if (syncAll) Long.MAX_VALUE else (Calendar.getInstance().apply { timeInMillis = startTs }).apply { add(Calendar.MONTH, 1) }.timeInMillis
+                petProfile.value?.let { profile -> val res = supabase.upsertData("宠物档案", profile); addSyncLog("宠物档案", "UPSERT", profile.id, res); if (res.isSuccess) dao.insertPetProfile(profile.copy(isSynced = true)) }
+                allBowls.value.forEach { val res = supabase.upsertData("食具配置", it); addSyncLog("食具配置", "UPSERT", it.id, res); if (res.isSuccess) dao.insertBowl(it.copy(isSynced = true)) }
+                medications.value.forEach { val res = supabase.upsertData("药品库", it); addSyncLog("药品库", "UPSERT", it.id, res); if (res.isSuccess) dao.insertMedication(it.copy(isSynced = true)) }
+                snacks.value.forEach { val res = supabase.upsertData("零食库", it); addSyncLog("零食库", "UPSERT", it.id, res); if (res.isSuccess) dao.insertSnack(it.copy(isSynced = true)) }
+                uploadTable(medicationLogs.value, "用药打卡记录", startTs, endTs) { dao.updateMedicationLogs(listOf(it.copy(isSynced = true))) }
+                uploadTable(snackLogs.value, "零食打卡记录", startTs, endTs) { dao.updateSnackLogs(listOf(it.copy(isSynced = true))) }
+                uploadTable(foodLogs.value + waterLogs.value, "饮食饮水记录", startTs, endTs) { dao.updateConsumptionLogs(listOf(it.copy(isSynced = true))) }
+                uploadTable(weightLogs.value, "体重记录", startTs, endTs) { dao.updateWeightLogs(listOf(it.copy(isSynced = true))) }
+                uploadTable(excretionLogs.value, "拉撒记录", startTs, endTs) { dao.updateExcretionLogs(listOf(it.copy(isSynced = true))) }
+                addActivityLog("SYNC", "Cloud", "Upload complete")
+            } catch (e: Exception) { Log.e("SyncError", "Upload failed: ${e.message}") } finally { _isSyncing.value = false }
+        }
+    }
 
-                // 2. 食具配置
-                val unsyncedBowls = allBowls.value.filter { !it.isSynced }
-                if (unsyncedBowls.isNotEmpty()) {
-                    supabase.upsertData("食具配置", unsyncedBowls)
-                    dao.updateBowls(unsyncedBowls.map { it.copy(isSynced = true) })
-                }
-
-                // 3. 药品/用药
-                val unsyncedMeds = medications.value.filter { !it.isSynced }
-                if (unsyncedMeds.isNotEmpty()) {
-                    supabase.upsertData("药品库", unsyncedMeds)
-                    dao.updateMedications(unsyncedMeds.map { it.copy(isSynced = true) })
-                }
-                val unsyncedMedLogs = medicationLogs.value.filter { !it.isSynced }
-                if (unsyncedMedLogs.isNotEmpty()) {
-                    supabase.upsertData("药品打卡记录", unsyncedMedLogs)
-                    dao.updateMedicationLogs(unsyncedMedLogs.map { it.copy(isSynced = true) })
-                }
-
-                // 4. 零食/喂食
-                val unsyncedSnacks = snacks.value.filter { !it.isSynced }
-                if (unsyncedSnacks.isNotEmpty()) {
-                    supabase.upsertData("零食库", unsyncedSnacks)
-                    dao.updateSnacks(unsyncedSnacks.map { it.copy(isSynced = true) })
-                }
-                val unsyncedSnackLogs = snackLogs.value.filter { !it.isSynced }
-                if (unsyncedSnackLogs.isNotEmpty()) {
-                    supabase.upsertData("零食打卡记录", unsyncedSnackLogs)
-                    dao.updateSnackLogs(unsyncedSnackLogs.map { it.copy(isSynced = true) })
-                }
-
-                // 5. 饮食饮水
-                val unsyncedCons = (foodLogs.value + waterLogs.value).filter { !it.isSynced }
-                if (unsyncedCons.isNotEmpty()) {
-                    supabase.upsertData("饮食饮水记录", unsyncedCons)
-                    dao.updateConsumptionLogs(unsyncedCons.map { it.copy(isSynced = true) })
-                }
-
-                // 6. 体重
-                val unsyncedWeight = weightLogs.value.filter { !it.isSynced }
-                if (unsyncedWeight.isNotEmpty()) {
-                    supabase.upsertData("体重记录", unsyncedWeight)
-                    dao.updateWeightLogs(unsyncedWeight.map { it.copy(isSynced = true) })
-                }
-
-                // 7. 拉撒
-                val unsyncedEx = excretionLogs.value.filter { !it.isSynced }
-                if (unsyncedEx.isNotEmpty()) {
-                    supabase.upsertData("拉撒记录", unsyncedEx)
-                    dao.updateExcretionLogs(unsyncedEx.map { it.copy(isSynced = true) })
-                }
-
-                addActivityLog("SYNC", "Cloud", "Manual incremental upload completed")
-            } catch (e: Exception) {
-                Log.e("SyncError", "Manual upload failed: ${e.localizedMessage}")
-            } finally {
-                _isSyncing.value = false
+    private suspend fun <T> uploadTable(localList: List<T>, tableName: String, start: Long, end: Long, onSuccess: suspend (T) -> Unit) {
+        localList.forEach { item ->
+            val ts = when(item) { is MedicationLog -> item.timestamp; is SnackLog -> item.timestamp; is ConsumptionLog -> item.timestamp; is WeightLog -> item.timestamp; is ExcretionLog -> item.timestamp; else -> 0L }
+            val id = when(item) { is MedicationLog -> item.id; is SnackLog -> item.id; is ConsumptionLog -> item.id; is WeightLog -> item.id; is ExcretionLog -> item.id; else -> "" }
+            val synced = when(item) { is MedicationLog -> item.isSynced; is SnackLog -> item.isSynced; is ConsumptionLog -> item.isSynced; is WeightLog -> item.isSynced; is ExcretionLog -> item.isSynced; else -> true }
+            if ((ts in start until end) || !synced) {
+                val res = supabase.upsertData(tableName, item as Any)
+                addSyncLog(tableName, "UPSERT", id, res)
+                if (res.isSuccess) onSuccess(item)
             }
         }
     }
@@ -246,394 +277,129 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
     fun updatePetProfile(nickname: String, breed: String?, birthday: String?, avatarPath: String?) {
         viewModelScope.launch(Dispatchers.IO) {
             val current = petProfile.value
-            val profile = PetProfile(
-                id = current?.id ?: 0L,
-                nickname = nickname,
-                breed = breed,
-                birthday = birthday,
-                avatarPath = avatarPath,
-                isSynced = false
-            )
-            val id = dao.insertPetProfile(profile)
-            val toSync = profile.copy(id = id)
-            supabase.upsertData("宠物档案", toSync)
-            dao.insertPetProfile(toSync.copy(isSynced = true))
-            addActivityLog("UPDATE", "PetProfile", nickname)
+            val profile = PetProfile(id = current?.id ?: java.util.UUID.randomUUID().toString(), nickname = nickname, breed = breed, birthday = birthday, avatarPath = avatarPath, isSynced = false)
+            handleUpdateDeleteSync("宠物档案", "UPDATE", profile.id, { supabase.upsertData("宠物档案", profile) }) { dao.insertPetProfile(profile.copy(isSynced = true)) }
         }
     }
 
-    fun updateBowl(name: String, tareWeight: Float, type: BowlType) {
+    fun updateBowl(name: String, tareWeight: Float, type: BowlType, currentId: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
-            val existing = if (type == BowlType.FOOD) foodBowl.value else waterBowl.value
-            val bowl = Bowl(
-                id = existing?.id ?: 0L,
-                name = name,
-                tareWeight = tareWeight,
-                type = type,
-                isSynced = false
-            )
-            val id = dao.insertBowl(bowl)
-            val toSync = bowl.copy(id = id)
-            supabase.upsertData("食具配置", toSync)
-            dao.insertBowl(toSync.copy(isSynced = true))
-            addActivityLog("UPDATE", "Bowl", "$name (${type.name})")
+            baseDataMutex.withLock {
+                // 优先使用传入的 ID，其次从数据库查找，最后才生成新 UUID
+                val existingId = currentId ?: dao.getBowlByType(type).first()?.id
+                
+                val bowl = Bowl(
+                    id = existingId ?: java.util.UUID.randomUUID().toString(),
+                    name = name,
+                    tareWeight = tareWeight,
+                    type = type,
+                    isSynced = false
+                )
+                val op = if (existingId != null) "UPDATE" else "ADD"
+                handleUpdateDeleteSync("食具配置", op, bowl.id, { supabase.upsertData("食具配置", bowl) }) {
+                    dao.insertBowl(bowl.copy(isSynced = true)) 
+                }
+            }
         }
     }
 
     fun recordConsumption(grossWeight: Float, type: BowlType, isFromEmpty: Boolean, newTareWeight: Float? = null, targetDate: Calendar? = null) {
         viewModelScope.launch(Dispatchers.IO) {
-            val currentBowl = if (type == BowlType.FOOD) foodBowl.value else waterBowl.value
-            val tare = newTareWeight ?: currentBowl?.tareWeight ?: 0f
-            
-            // 确保碗存在且皮重更新
-            if (currentBowl == null || (newTareWeight != null && newTareWeight != currentBowl.tareWeight)) {
-                val bowl = Bowl(
-                    id = currentBowl?.id ?: 0L,
-                    name = currentBowl?.name ?: (if (type == BowlType.FOOD) "食盆" else "水盆"),
-                    tareWeight = tare,
-                    type = type,
-                    isSynced = false
-                )
-                val bId = dao.insertBowl(bowl)
-                supabase.upsertData("食具配置", bowl.copy(id = bId))
-                dao.insertBowl(bowl.copy(id = bId, isSynced = true))
-            }
-
-            val logs = if (type == BowlType.FOOD) foodLogs.value else waterLogs.value
-            val lastLog = logs.firstOrNull()
-            // 修复：如果 lastLog.grossWeight 为 0（旧数据），则回退到碗重作为计算基准
-            val lastGross = if ((lastLog?.grossWeight ?: 0f) > 0f) lastLog!!.grossWeight else tare
-            val timestamp = generateTimestamp(targetDate)
-
-            val finalDiff: Float
-            if (isFromEmpty) {
-                // 逻辑：空碗记录。公式：新数值 - 碗重。之前的剩余量不记作消耗（视为倒掉或清理了）。
-                finalDiff = grossWeight - tare
-            } else {
-                // 逻辑：未空记录。公式：新数值 - 上次总重 = 计算插值。
-                finalDiff = grossWeight - lastGross
-            }
-
-            val roundedDiff = kotlin.math.round(finalDiff * 10f) / 10f
-
-            if (roundedDiff != 0f) {
-                val log = ConsumptionLog(
-                    timestamp = timestamp,
-                    amount = roundedDiff,
-                    grossWeight = grossWeight, // 存放当前总重，供下次计算作为基准
-                    type = if (roundedDiff > 0) ConsumptionType.ADD else ConsumptionType.EAT,
-                    bowlType = type,
-                    action = if (roundedDiff > 0) "增加" else "减少",
-                    method = when {
-                        roundedDiff > 0 && type == BowlType.FOOD -> "添加饮食"
-                        roundedDiff > 0 && type == BowlType.WATER -> "添加饮水"
-                        roundedDiff <= 0 && type == BowlType.FOOD -> "吃吃"
-                        roundedDiff <= 0 && type == BowlType.WATER -> "喝喝"
-                        else -> ""
-                    },
-                    isSynced = false
-                )
-                val lId = dao.insertConsumptionLog(log)
-                supabase.upsertData("饮食饮水记录", log.copy(id = lId))
-                dao.insertConsumptionLog(log.copy(id = lId, isSynced = true))
-                addActivityLog("ADD", "Consumption", "${if(roundedDiff>0) "Refill" else "Eat"} ${kotlin.math.abs(roundedDiff)}${if(type==BowlType.FOOD) "g" else "ml"}")
-            }
-        }
-    }
-
-    private fun generateTimestamp(targetDate: Calendar?): Long {
-        return if (targetDate != null) {
-            val now = Calendar.getInstance()
-            val cal = targetDate.clone() as Calendar
-            cal.set(Calendar.HOUR_OF_DAY, now.get(Calendar.HOUR_OF_DAY))
-            cal.set(Calendar.MINUTE, now.get(Calendar.MINUTE))
-            cal.set(Calendar.SECOND, now.get(Calendar.SECOND))
-            cal.set(Calendar.MILLISECOND, now.get(Calendar.MILLISECOND))
-            cal.timeInMillis
-        } else System.currentTimeMillis()
-    }
-
-    fun deleteConsumption(log: ConsumptionLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.deleteConsumptionLog(log)
-            supabase.deleteData("饮食饮水记录", log.id)
-            addActivityLog("DELETE", "Consumption", "${log.amount}${if(log.bowlType==BowlType.FOOD) "g" else "ml"}")
-        }
-    }
-
-    fun deleteWeight(log: WeightLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.deleteWeightLog(log)
-            supabase.deleteData("体重记录", log.id)
-            addActivityLog("DELETE", "Weight", "${log.weight}kg")
-        }
-    }
-
-    fun deleteMedicationLog(log: MedicationLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.deleteMedicationLog(log)
-            supabase.deleteData("药品打卡记录", log.id)
-            addActivityLog("DELETE", "Medication", "Dosage: ${log.dosage}")
-        }
-    }
-
-    fun deleteExcretion(log: ExcretionLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.deleteExcretionLog(log)
-            supabase.deleteData("拉撒记录", log.id)
-            addActivityLog("DELETE", "Excretion", log.type.name)
-        }
-    }
-
-    fun addWeightLog(weight: Float, note: String? = null, targetDate: Calendar? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val log = WeightLog(timestamp = generateTimestamp(targetDate), weight = weight, note = note, isSynced = false)
-            val id = dao.insertWeightLog(log)
-            val toSync = log.copy(id = id)
-            supabase.upsertData("体重记录", toSync)
-            dao.insertWeightLog(toSync.copy(isSynced = true))
-            addActivityLog("ADD", "Weight", "${weight}kg ${note ?: ""}")
-        }
-    }
-
-    fun addMedication(name: String, unit: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val med = Medication(name = name, unit = unit, isSynced = false)
-            val id = dao.insertMedication(med)
-            val toSync = med.copy(id = id)
-            supabase.upsertData("药品库", toSync)
-            dao.insertMedication(toSync.copy(isSynced = true))
-            addActivityLog("ADD", "MedicationType", name)
-        }
-    }
-
-    fun addMedicationLog(medicationId: Long, dosage: Float, targetDate: Calendar? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val med = medications.value.find { it.id == medicationId }
-            val log = MedicationLog(
-                medicationId = medicationId, 
-                medicationName = med?.name ?: "未知药品",
-                timestamp = generateTimestamp(targetDate), 
-                dosage = dosage,
-                isSynced = false
-            )
-            val id = dao.insertMedicationLog(log)
-            val toSync = log.copy(id = id)
-            supabase.upsertData("药品打卡记录", toSync)
-            dao.insertMedicationLog(toSync.copy(isSynced = true))
-            addActivityLog("ADD", "MedicationLog", "${med?.name ?: "Unknown"} $dosage")
-        }
-    }
-
-    fun addExcretionLog(type: ExcretionType, shape: String? = null, targetDate: Calendar? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val log = ExcretionLog(timestamp = generateTimestamp(targetDate), type = type, shape = shape, isSynced = false)
-            val id = dao.insertExcretionLog(log)
-            val toSync = log.copy(id = id)
-            supabase.upsertData("拉撒记录", toSync)
-            dao.insertExcretionLog(toSync.copy(isSynced = true))
-            addActivityLog("ADD", "Excretion", "${type.name} - ${shape ?: "未指定"}")
-        }
-    }
-
-    fun updateConsumption(log: ConsumptionLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updated = log.copy(isSynced = false)
-            dao.updateConsumptionLog(updated)
-            supabase.upsertData("饮食饮水记录", updated)
-            dao.updateConsumptionLog(updated.copy(isSynced = true))
-            addActivityLog("UPDATE", "Consumption", "${log.amount}")
-        }
-    }
-
-    fun updateWeightLog(log: WeightLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updated = log.copy(isSynced = false)
-            dao.updateWeightLog(updated)
-            supabase.upsertData("体重记录", updated)
-            dao.updateWeightLog(updated.copy(isSynced = true))
-            addActivityLog("UPDATE", "Weight", "${log.weight}kg")
-        }
-    }
-
-    fun updateMedicationLog(log: MedicationLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updated = log.copy(isSynced = false)
-            dao.updateMedicationLog(updated)
-            supabase.upsertData("药品打卡记录", updated)
-            dao.updateMedicationLog(updated.copy(isSynced = true))
-            addActivityLog("UPDATE", "Medication", "Dosage: ${log.dosage}")
-        }
-    }
-
-    fun updateExcretion(log: ExcretionLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updated = log.copy(isSynced = false)
-            dao.updateExcretionLog(updated)
-            supabase.upsertData("拉撒记录", updated)
-            dao.updateExcretionLog(updated.copy(isSynced = true))
-            addActivityLog("UPDATE", "Excretion", log.type.name)
-        }
-    }
-
-    fun addSnack(name: String, unit: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val snack = Snack(name = name, unit = unit, isSynced = false)
-            val id = dao.insertSnack(snack)
-            val toSync = snack.copy(id = id)
-            supabase.upsertData("零食库", toSync)
-            dao.insertSnack(toSync.copy(isSynced = true))
-            addActivityLog("ADD", "SnackType", name)
-        }
-    }
-
-    fun addSnackLog(snackId: Long, amount: Float, targetDate: Calendar? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val snack = snacks.value.find { it.id == snackId }
-            val log = SnackLog(
-                snackId = snackId, 
-                snackName = snack?.name ?: "未知零食",
-                timestamp = generateTimestamp(targetDate), 
-                amount = amount,
-                isSynced = false
-            )
-            val id = dao.insertSnackLog(log)
-            val toSync = log.copy(id = id)
-            supabase.upsertData("零食打卡记录", toSync)
-            dao.insertSnackLog(toSync.copy(isSynced = true))
-            addActivityLog("ADD", "SnackLog", "${snack?.name ?: "Unknown"} $amount")
-        }
-    }
-
-    fun deleteSnackLog(log: SnackLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.deleteSnackLog(log)
-            supabase.deleteData("零食打卡记录", log.id)
-            addActivityLog("DELETE", "SnackLog", "Amount: ${log.amount}")
-        }
-    }
-
-    fun updateSnackLog(log: SnackLog) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updated = log.copy(isSynced = false)
-            dao.updateSnackLog(updated)
-            supabase.upsertData("零食打卡记录", updated)
-            dao.updateSnackLog(updated.copy(isSynced = true))
-            addActivityLog("UPDATE", "SnackLog", "${log.amount}")
-        }
-    }
-
-    private fun addActivityLog(action: String, type: String, details: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val log = ActivityLog(
-                action = action,
-                entityType = type,
-                details = details
-            )
-            dao.insertActivityLog(log)
-        }
-    }
-
-    private fun triggerRedirection(reason: String) {
-        viewModelScope.launch {
-            _redirectionEvent.emit(reason)
-        }
-    }
-
-    suspend fun getTableNames(): List<String> {
-        return withContext(Dispatchers.IO) {
-            val supabaseTables = supabase.getAllSupabaseTables()
-            if (supabaseTables.isNotEmpty()) return@withContext supabaseTables
-
-            val cursor = db.openHelper.readableDatabase.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'android_metadata' AND name NOT LIKE 'sqlite_sequence' AND name NOT LIKE 'room_master_table'")
-            val names = mutableListOf<String>()
-            while (cursor.moveToNext()) {
-                names.add(cursor.getString(0))
-            }
-            cursor.close()
-            names
-        }
-    }
-
-    suspend fun getLocalTablesWithLatestRow(): List<Pair<String, Map<String, String>>> = withContext(Dispatchers.IO) {
-        val tables = mutableListOf<Pair<String, Map<String, String>>>()
-        val dbSql = db.openHelper.readableDatabase
-        val cursorNames = dbSql.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'android_metadata' AND name NOT LIKE 'sqlite_sequence' AND name NOT LIKE 'room_master_table'")
-        
-        while (cursorNames.moveToNext()) {
-            val tableName = cursorNames.getString(0)
-            val translatedTableName = TranslationHelper.translateTable(tableName)
-            val orderedCols = TranslationHelper.getColumnOrder(tableName)
-            val dataMap = mutableMapOf<String, String>()
-            
-            // 查询该表最新一条数据
-            val dataCursor = dbSql.query("SELECT * FROM $tableName ORDER BY rowid DESC LIMIT 1")
-            if (dataCursor.moveToFirst()) {
-                // 1. 先按指定顺序添加列
-                orderedCols.forEach { colName ->
-                    try {
-                        val index = dataCursor.getColumnIndex(colName)
-                        if (index != -1) {
-                            val translatedColName = TranslationHelper.translateColumn(colName)
-                            val value = dataCursor.getString(index) ?: "-"
-                            dataMap[translatedColName] = TranslationHelper.translateValue(value)
-                        }
-                    } catch (e: Exception) {}
-                }
-                // 2. 添加不在排序列表中的其他列 (排除头像路径)
-                for (i in 0 until dataCursor.columnCount) {
-                    val colName = dataCursor.getColumnName(i)
-                    if (!orderedCols.contains(colName) && colName != "avatarPath") {
-                        val translatedColName = TranslationHelper.translateColumn(colName)
-                        val value = try { dataCursor.getString(i) ?: "-" } catch(e: Exception) { "[BLOB/Error]" }
-                        dataMap[translatedColName] = TranslationHelper.translateValue(value)
+            baseDataMutex.withLock {
+                // 实时查找碗，确保计算绝对准确
+                val currentBowl = dao.getBowlByType(type).first()
+                val tare = newTareWeight ?: currentBowl?.tareWeight ?: 0f
+                
+                // 如果碗不存在或皮重更新
+                if (currentBowl == null || (newTareWeight != null && newTareWeight != currentBowl.tareWeight)) {
+                    val bowl = Bowl(
+                        id = currentBowl?.id ?: java.util.UUID.randomUUID().toString(),
+                        name = currentBowl?.name ?: (if (type == BowlType.FOOD) "食盆" else "水盆"),
+                        tareWeight = tare,
+                        type = type,
+                        isSynced = false
+                    )
+                    val op = if (currentBowl != null) "UPDATE" else "ADD"
+                    handleUpdateDeleteSync("食具配置", op, bowl.id, { supabase.upsertData("食具配置", bowl) }) {
+                        dao.insertBowl(bowl.copy(isSynced = true))
                     }
                 }
-            } else {
-                // 如果没数据，至少拉下列名 (排除头像路径)
-                for (i in 0 until dataCursor.columnCount) {
-                    val colName = dataCursor.getColumnName(i)
-                    if (colName != "avatarPath") {
-                        dataMap[TranslationHelper.translateColumn(colName)] = "[无数据]"
-                    }
+                
+                // 获取最新日志计算差值
+                val logs = if (type == BowlType.FOOD) dao.getConsumptionLogs(BowlType.FOOD).first() else dao.getConsumptionLogs(BowlType.WATER).first()
+                val lastLog = logs.firstOrNull()
+                val lastGross = if ((lastLog?.grossWeight ?: 0f) > 0f) lastLog!!.grossWeight else tare
+                val ts = generateTimestamp(targetDate)
+                val diff = if (isFromEmpty) grossWeight - tare else grossWeight - lastGross
+                val rounded = kotlin.math.round(diff * 10f) / 10f
+                if (rounded != 0f) {
+                    val log = ConsumptionLog(timestamp = ts, amount = rounded, grossWeight = grossWeight, type = if (rounded > 0) ConsumptionType.ADD else ConsumptionType.EAT, bowlType = type, action = if (rounded > 0) "增加" else "减少", method = if (rounded > 0) (if(type==BowlType.FOOD) "添加饮食" else "添加饮水") else (if(type==BowlType.FOOD) "吃吃" else "喝喝"), isSynced = false)
+                    handleSyncDecision("饮食饮水记录", "ADD", log)
                 }
             }
-            dataCursor.close()
-            tables.add(translatedTableName to dataMap)
-        }
-        cursorNames.close()
-        
-        // 按照用户要求的顺序进行排序
-        val displayOrder = listOf("宠物档案", "体重记录", "饮食饮水记录", "拉撒记录", "零食库", "零食打卡记录", "药品库", "药品打卡记录", "食具配置", "操作记录")
-        tables.sortedBy { (name, _) -> 
-            val index = displayOrder.indexOf(name)
-            if (index != -1) index else displayOrder.size
         }
     }
 
-    suspend fun getCloudTablesWithLatestRow(): List<Pair<String, Map<String, String>>> = withContext(Dispatchers.IO) {
-        val tableNames = supabase.getAllSupabaseTables()
-        val tables = tableNames.map { name ->
-            val latestRow = supabase.fetchLatestRow(name)
-            val dataMap = mutableMapOf<String, String>()
-            
-            latestRow?.forEach { (k, v) ->
-                // 云端保持原样顺序，仅翻译 Key
-                dataMap[TranslationHelper.translateColumn(k)] = TranslationHelper.translateValue(v.toString().removeSurrounding("\""))
-            }
+    private fun generateTimestamp(targetDate: Calendar?): Long = targetDate?.timeInMillis ?: System.currentTimeMillis()
 
-            if (dataMap.isEmpty()) {
-                // 如果没拉到记录，占位
-                dataMap["提示"] = "表为空或无法获取最新行"
-            }
-            TranslationHelper.translateTable(name) to dataMap
-        }
+    fun deleteConsumption(log: ConsumptionLog) { viewModelScope.launch(Dispatchers.IO) { dao.deleteConsumptionLog(log); handleUpdateDeleteSync("饮食饮水记录", "DELETE", log.id, { supabase.deleteData("饮食饮水记录", log.id) }) {} } }
+    fun deleteWeight(log: WeightLog) { viewModelScope.launch(Dispatchers.IO) { dao.deleteWeightLog(log); handleUpdateDeleteSync("体重记录", "DELETE", log.id, { supabase.deleteData("体重记录", log.id) }) {} } }
+    fun deleteMedicationLog(log: MedicationLog) { viewModelScope.launch(Dispatchers.IO) { dao.deleteMedicationLog(log); handleUpdateDeleteSync("用药打卡记录", "DELETE", log.id, { supabase.deleteData("用药打卡记录", log.id) }) {} } }
+    fun deleteExcretion(log: ExcretionLog) { viewModelScope.launch(Dispatchers.IO) { dao.deleteExcretionLog(log); handleUpdateDeleteSync("拉撒记录", "DELETE", log.id, { supabase.deleteData("拉撒记录", log.id) }) {} } }
+    fun deleteSnackLog(log: SnackLog) { viewModelScope.launch(Dispatchers.IO) { dao.deleteSnackLog(log); handleUpdateDeleteSync("零食打卡记录", "DELETE", log.id, { supabase.deleteData("零食打卡记录", log.id) }) {} } }
 
-        // 按照用户要求的顺序进行排序
-        val displayOrder = listOf("宠物档案", "体重记录", "饮食饮水记录", "拉撒记录", "零食库", "零食打卡记录", "药品库", "药品打卡记录", "食具配置", "操作记录")
-        tables.sortedBy { (name, _) -> 
-            val index = displayOrder.indexOf(name)
-            if (index != -1) index else displayOrder.size
-        }
+    fun addWeightLog(weight: Float, note: String? = null, targetDate: Calendar? = null) { viewModelScope.launch(Dispatchers.IO) { handleSyncDecision("体重记录", "ADD", WeightLog(timestamp = generateTimestamp(targetDate), weight = weight, note = note, isSynced = false)) } }
+    
+    fun addMedication(name: String, unit: String) { 
+        viewModelScope.launch(Dispatchers.IO) { 
+            baseDataMutex.withLock {
+                val existing = dao.getMedicationByName(name)
+                val med = Medication(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name, unit = unit, isSynced = false)
+                val op = if (existing != null) "UPDATE" else "ADD"
+                handleSyncDecision("药品库", op, med) 
+            }
+        } 
     }
+    
+    fun addMedicationLog(medicationId: String, dosage: Float, targetDate: Calendar? = null) { 
+        viewModelScope.launch(Dispatchers.IO) { 
+            val med = dao.getMedicationById(medicationId)
+            handleSyncDecision("用药打卡记录", "ADD", MedicationLog(medicationId = medicationId, medicationName = med?.name ?: "未知药品", timestamp = generateTimestamp(targetDate), dosage = dosage, isSynced = false)) 
+        } 
+    }
+    
+    fun addExcretionLog(type: ExcretionType, shape: String? = null, targetDate: Calendar? = null) { viewModelScope.launch(Dispatchers.IO) { handleSyncDecision("拉撒记录", "ADD", ExcretionLog(timestamp = generateTimestamp(targetDate), type = type, shape = shape, isSynced = false)) } }
+    
+    fun addSnack(name: String, unit: String) { 
+        viewModelScope.launch(Dispatchers.IO) { 
+            baseDataMutex.withLock {
+                val existing = dao.getSnackByName(name)
+                val snack = Snack(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name, unit = unit, isSynced = false)
+                val op = if (existing != null) "UPDATE" else "ADD"
+                handleSyncDecision("零食库", op, snack) 
+            }
+        } 
+    }
+    
+    fun addSnackLog(snackId: String, amount: Float, targetDate: Calendar? = null) { 
+        viewModelScope.launch(Dispatchers.IO) { 
+            val snack = dao.getSnackById(snackId)
+            handleSyncDecision("零食打卡记录", "ADD", SnackLog(snackId = snackId, snackName = snack?.name ?: "未知零食", timestamp = generateTimestamp(targetDate), amount = amount, isSynced = false)) 
+        } 
+    }
+
+    fun updateConsumption(log: ConsumptionLog) { viewModelScope.launch(Dispatchers.IO) { dao.updateConsumptionLog(log.copy(isSynced = false)); handleUpdateDeleteSync("饮食饮水记录", "UPDATE", log.id, { supabase.upsertData("饮食饮水记录", log) }) { dao.updateConsumptionLog(log.copy(isSynced = true)) } } }
+    fun updateWeightLog(log: WeightLog) { viewModelScope.launch(Dispatchers.IO) { dao.updateWeightLog(log.copy(isSynced = false)); handleUpdateDeleteSync("体重记录", "UPDATE", log.id, { supabase.upsertData("体重记录", log) }) { dao.updateWeightLog(log.copy(isSynced = true)) } } }
+    fun updateMedicationLog(log: MedicationLog) { viewModelScope.launch(Dispatchers.IO) { dao.updateMedicationLog(log.copy(isSynced = false)); handleUpdateDeleteSync("用药打卡记录", "UPDATE", log.id, { supabase.upsertData("用药打卡记录", log) }) { dao.updateMedicationLog(log.copy(isSynced = true)) } } }
+    fun updateExcretion(log: ExcretionLog) { viewModelScope.launch(Dispatchers.IO) { dao.updateExcretionLog(log.copy(isSynced = false)); handleUpdateDeleteSync("拉撒记录", "UPDATE", log.id, { supabase.upsertData("拉撒记录", log) }) { dao.updateExcretionLog(log.copy(isSynced = true)) } } }
+    fun updateSnackLog(log: SnackLog) { viewModelScope.launch(Dispatchers.IO) { dao.updateSnackLog(log.copy(isSynced = false)); handleUpdateDeleteSync("零食打卡记录", "UPDATE", log.id, { supabase.upsertData("零食打卡记录", log) }) { dao.updateSnackLog(log.copy(isSynced = true)) } } }
+
+    private fun addActivityLog(action: String, type: String, details: String) { viewModelScope.launch(Dispatchers.IO) { dao.insertActivityLog(ActivityLog(action = action, entityType = type, details = details)) } }
+    private fun addSyncLog(tableName: String, op: String, recordId: String, result: SupabaseRepository.NetworkResult) { viewModelScope.launch(Dispatchers.IO) { dao.insertSyncLog(SyncLog(tableName = tableName, recordId = recordId, operation = op, requestBody = result.requestBody, responseBody = result.responseBody, statusCode = result.statusCode)) } }
+    fun triggerConfigCheck() { if (!supabaseConfig.value.isValid) triggerRedirection("CONFIG_NEEDED") }
+    private fun triggerRedirection(reason: String) { viewModelScope.launch { _redirectionEvent.emit(reason) } }
+    suspend fun getTableNames(): List<String> = withContext(Dispatchers.IO) { val st = supabase.getAllSupabaseTables(); if (st.isNotEmpty()) st else { val c = db.openHelper.readableDatabase.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'android_metadata' AND name NOT LIKE 'sqlite_sequence' AND name NOT LIKE 'room_master_table'"); val names = mutableListOf<String>(); while (c.moveToNext()) names.add(c.getString(0)); c.close(); names } }
+    suspend fun getLocalTablesWithLatestRow(): List<Pair<String, Map<String, String>>> = withContext(Dispatchers.IO) { val tables = mutableListOf<Pair<String, Map<String, String>>>(); val dbSql = db.openHelper.readableDatabase; val cn = dbSql.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'android_metadata' AND name NOT LIKE 'sqlite_sequence' AND name NOT LIKE 'room_master_table'"); while (cn.moveToNext()) { val tn = cn.getString(0); val ttn = TranslationHelper.translateTable(tn); val ocs = TranslationHelper.getColumnOrder(tn); val dm = mutableMapOf<String, String>(); val dc = dbSql.query("SELECT * FROM $tn ORDER BY rowid DESC LIMIT 1"); if (dc.moveToFirst()) { ocs.forEach { cn -> val idx = dc.getColumnIndex(cn); if (idx != -1) dm[TranslationHelper.translateColumn(cn)] = TranslationHelper.translateValue(dc.getString(idx) ?: "-") }; for (i in 0 until dc.columnCount) { val cn = dc.getColumnName(i); if (!ocs.contains(cn) && cn != "avatarPath") dm[TranslationHelper.translateColumn(cn)] = TranslationHelper.translateValue(try { dc.getString(i) ?: "-" } catch(e: Exception) { "-" }) } } else { for (i in 0 until dc.columnCount) { val cn = dc.getColumnName(i); if (cn != "avatarPath") dm[TranslationHelper.translateColumn(cn)] = "[无数据]" } }; dc.close(); tables.add(ttn to dm) }; cn.close(); val dor = listOf("宠物档案", "体重记录", "饮食饮水记录", "拉撒记录", "零食库", "零食打卡记录", "药品库", "药品打卡记录", "食具配置", "操作记录"); tables.sortedBy { (n, _) -> val idx = dor.indexOf(n); if (idx != -1) idx else dor.size } }
+    suspend fun getCloudTablesWithLatestRow(): List<Pair<String, Map<String, String>>> = withContext(Dispatchers.IO) { val tns = supabase.getAllSupabaseTables(); val tables = tns.map { n -> val lr = supabase.fetchLatestRow(n); val dm = mutableMapOf<String, String>(); lr?.forEach { (k, v) -> dm[TranslationHelper.translateColumn(k)] = TranslationHelper.translateValue(v.toString().removeSurrounding("\"")) }; if (dm.isEmpty()) dm["提示"] = "表为空所无法获取最新行"; TranslationHelper.translateTable(n) to dm }; val dor = listOf("宠物档案", "体重记录", "饮食饮水记录", "拉撒记录", "零食库", "零食打卡记录", "药品库", "药品打卡记录", "食具配置", "操作记录"); tables.sortedBy { (n, _) -> val idx = dor.indexOf(n); if (idx != -1) idx else dor.size } }
+    suspend fun getAllDataSnapshot(): DataSnapshot = withContext(Dispatchers.IO) { DataSnapshot(dao.getAllBowls().first(), dao.getConsumptionLogs(BowlType.FOOD).first() + dao.getConsumptionLogs(BowlType.WATER).first(), dao.getWeightLogs().first(), dao.getAllMedications().first(), dao.getMedicationLogs().first(), dao.getAllExcretionLogs().first(), dao.getAllSnacks().first(), dao.getSnackLogs().first(), dao.getPetProfile().first()) }
 }

@@ -7,13 +7,9 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [Bowl::class, ConsumptionLog::class, WeightLog::class, Medication::class, MedicationLog::class, ExcretionLog::class, Snack::class, SnackLog::class, ActivityLog::class, PetProfile::class],
-    version = 16,
-    exportSchema = true, // 启用 Schema 导出，AutoMigration 必须
-    autoMigrations = [
-        // 以后简单的加字段可以写在这里，例如：
-        // AutoMigration(from = 16, to = 17)
-    ]
+    entities = [Bowl::class, ConsumptionLog::class, WeightLog::class, Medication::class, MedicationLog::class, ExcretionLog::class, Snack::class, SnackLog::class, ActivityLog::class, PetProfile::class, SyncLog::class, PendingSyncTask::class],
+    version = 22,
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class PetDatabase : RoomDatabase() {
@@ -30,9 +26,9 @@ abstract class PetDatabase : RoomDatabase() {
                     PetDatabase::class.java,
                     "pet_database"
                 )
-                    .addMigrations(*DatabaseMigrations.all()) // 从仓库加载所有手动迁移逻辑
-                    .fallbackToDestructiveMigration(dropAllTables = true)
-                    .build()
+                .addMigrations(*DatabaseMigrations.all()) // 加载所有手动迁移逻辑
+                .fallbackToDestructiveMigration() // 兜底策略：若找不到迁移路径则重建数据库
+                .build()
                 INSTANCE = instance
                 instance
             }

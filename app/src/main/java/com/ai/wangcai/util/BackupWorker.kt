@@ -53,8 +53,9 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             val eLogs = dao.getAllExcretionLogs().first()
             val snacks = dao.getAllSnacks().first()
             val sLogs = dao.getSnackLogs().first()
+            val petProfile = dao.getPetProfile().first()
 
-            ExcelManager.performAutoBackup(applicationContext, bowls, cLogs, wLogs, meds, mLogs, eLogs, snacks, sLogs)
+            ExcelManager.performAutoBackup(applicationContext, bowls, cLogs, wLogs, meds, mLogs, eLogs, snacks, sLogs, petProfile)
             androidx.work.ListenableWorker.Result.success()
         } catch (e: Exception) {
             android.util.Log.e("BackupWorker", "Auto backup failed, retrying...", e)

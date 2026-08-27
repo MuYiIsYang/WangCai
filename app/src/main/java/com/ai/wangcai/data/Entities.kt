@@ -9,31 +9,33 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 fun Long.toDbTime(): String {
-    // 使用 ISO 8601 格式并包含时区偏移 (例如: 2026-08-22T15:30:00+08:00)
-    // 这样 Supabase 就能正确识别这是本地时间而非 UTC 时间
-    return java.time.OffsetDateTime.ofInstant(
-        java.time.Instant.ofEpochMilli(this),
-        java.time.ZoneId.systemDefault()
-    ).format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+    // 强制使用 ISO 8601 格式 (yyyy-MM-ddTHH:mm:ss.SSS)，满足 Supabase 标准
+    val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.CHINA)
+    return sdf.format(Date(this))
 }
 
 fun String.toTimestamp(): Long {
     if (this.isBlank()) return 0L
+    val raw = this.trim().replace(" ", "T")
     return try {
-        // 1. 尝试 ISO 8601 格式 (Supabase 默认, 如 2026-08-22T13:25:40.998+00)
-        if (this.contains("T")) {
-            java.time.OffsetDateTime.parse(this).toInstant().toEpochMilli()
+        if (raw.contains("T")) {
+            if (raw.contains("+") || raw.endsWith("Z")) {
+                java.time.OffsetDateTime.parse(raw).toInstant().toEpochMilli()
+            } else {
+                java.time.LocalDateTime.parse(raw)
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+            }
         } else {
-            // 2. 尝试本地数据库格式 yyyy-MM-dd HH:mm:ss
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
-            sdf.parse(this)?.time ?: 0L
+            sdf.parse(raw)?.time ?: 0L
         }
     } catch (e: Exception) {
         try {
-            // 3. 后备方案：移除时区偏移重试 (针对某些环境返回的特殊 ISO)
-            val clean = this.substringBefore("+").substringBefore("Z").replace("T", " ")
-            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
-            sdf.parse(clean)?.time ?: 0L
+            val normalized = raw.replace("T", " ")
+            val sdfMs = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.CHINA)
+            sdfMs.parse(normalized)?.time ?: 0L
         } catch (e2: Exception) {
             0L
         }
@@ -43,22 +45,22 @@ fun String.toTimestamp(): Long {
 @Serializable
 @Entity(tableName = "pet_profiles")
 data class PetProfile(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @SerialName("昵称") val nickname: String? = null,
     @SerialName("品种") val breed: String? = null,
     @SerialName("生日") val birthday: String? = null,
-    @Transient val avatarPath: String? = null,
+    val avatarPath: String? = null,
     @Transient val timestamp: Long = System.currentTimeMillis(),
-    @SerialName("创建时间") val createdAt: String = timestamp.toDbTime(),
-    @Transient val isSynced: Boolean = false // 本地标记，不上传
+    @SerialName("记录时间") val recordTime: String = timestamp.toDbTime(),
+    @Transient val isSynced: Boolean = false 
 )
 
 @Serializable
 @Entity(tableName = "bowls")
 data class Bowl(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @SerialName("吃喝碗") val name: String,
-    @SerialName("净重") val tareWeight: Float,
+    @SerialName("净重") val tareWeight: Float = 0f,
     @Transient val type: BowlType = BowlType.FOOD,
     @Transient val isSynced: Boolean = false
 )
@@ -71,16 +73,13 @@ enum class BowlType {
 @Serializable
 @Entity(tableName = "consumption_logs")
 data class ConsumptionLog(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @Transient val timestamp: Long = 0,
     @SerialName("记录时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
     @SerialName("变动数值") val amount: Float,
-    @SerialName("总重") val grossWeight: Float = 0f,
-
-    @SerialName("动作") val action: String = "",       // 增加 / 减少
-    @SerialName("吃喝方式") val method: String = "",   // 添加饮食 / 吃吃 / 添加饮水 / 喝喝
-
-    // 内部逻辑字段 (Room 存储)
+    @Transient val grossWeight: Float = 0f,
+    @SerialName("动作") val action: String = "",       
+    @SerialName("吃喝方式") val method: String = "",   
     @Transient val type: ConsumptionType = ConsumptionType.ADD,
     @Transient val bowlType: BowlType = BowlType.FOOD,
     @Transient val isSynced: Boolean = false
@@ -94,7 +93,7 @@ enum class ConsumptionType {
 @Serializable
 @Entity(tableName = "weight_logs")
 data class WeightLog(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @Transient val timestamp: Long = 0,
     @SerialName("记录时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
     @SerialName("体重") val weight: Float,
@@ -105,7 +104,7 @@ data class WeightLog(
 @Serializable
 @Entity(tableName = "medications")
 data class Medication(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @SerialName("药品名称") val name: String,
     @SerialName("剂量单位") val unit: String = "粒",
     @Transient val isSynced: Boolean = false
@@ -114,11 +113,11 @@ data class Medication(
 @Serializable
 @Entity(tableName = "medication_logs")
 data class MedicationLog(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    @SerialName("药品编号") val medicationId: Long,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    @SerialName("药品编号") val medicationId: String,
     @SerialName("药品名称") val medicationName: String = "",
     @Transient val timestamp: Long = 0,
-    @SerialName("用药时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
+    @SerialName("记录时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
     @SerialName("用药剂量") val dosage: Float,
     @Transient val isSynced: Boolean = false
 )
@@ -126,7 +125,7 @@ data class MedicationLog(
 @Serializable
 @Entity(tableName = "excretion_logs")
 data class ExcretionLog(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @Transient val timestamp: Long = 0,
     @SerialName("记录时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
     @SerialName("拉撒类型") val type: ExcretionType,
@@ -143,7 +142,7 @@ enum class ExcretionType {
 @Serializable
 @Entity(tableName = "snacks")
 data class Snack(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @SerialName("零食名称") val name: String,
     @SerialName("计量单位") val unit: String = "g",
     @Transient val isSynced: Boolean = false
@@ -152,11 +151,11 @@ data class Snack(
 @Serializable
 @Entity(tableName = "snack_logs")
 data class SnackLog(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    @SerialName("零食编号") val snackId: Long,
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    @SerialName("零食编号") val snackId: String,
     @SerialName("零食名称") val snackName: String = "",
     @Transient val timestamp: Long = 0,
-    @SerialName("喂食时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
+    @SerialName("记录时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
     @SerialName("喂食数量") val amount: Float,
     @Transient val isSynced: Boolean = false
 )
@@ -164,12 +163,46 @@ data class SnackLog(
 @Serializable
 @Entity(tableName = "activity_logs")
 data class ActivityLog(
-    @SerialName("编号") @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    @Transient val timestamp: Long = System.currentTimeMillis(),
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val timestamp: Long = System.currentTimeMillis(),
     @SerialName("记录时间") val recordTime: String = timestamp.toDbTime(),
     @SerialName("动作类型") val action: String,
     @SerialName("实体类型") val entityType: String,
     @SerialName("详情") val details: String
+)
+
+@Entity(tableName = "sync_logs")
+data class SyncLog(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val tableName: String,
+    val recordId: String = "", // 对应业务记录的 UUID
+    val operation: String,
+    val requestBody: String,
+    val responseBody: String,
+    val statusCode: Int,
+    val timestamp: Long = System.currentTimeMillis(),
+    val recordTime: String = timestamp.toDbTime()
+)
+
+@Entity(tableName = "pending_tasks")
+data class PendingSyncTask(
+    @PrimaryKey(autoGenerate = true) val taskId: Long = 0,
+    val tableName: String,
+    val operation: String, 
+    val recordId: String,   
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class DataSnapshot(
+    val bowls: List<Bowl>,
+    val consumptionLogs: List<ConsumptionLog>,
+    val weightLogs: List<WeightLog>,
+    val medications: List<Medication>,
+    val medicationLogs: List<MedicationLog>,
+    val excretionLogs: List<ExcretionLog>,
+    val snacks: List<Snack>,
+    val snackLogs: List<SnackLog>,
+    val petProfile: PetProfile?
 )
 
 data class SupabaseConfig(
