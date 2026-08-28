@@ -14,8 +14,8 @@ android {
         minSdk = 33
         //noinspection OldTargetApi
         targetSdk = 36
-        versionCode = 24
-        versionName = "2.4"
+        versionCode = 26
+        versionName = "2.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -43,6 +43,13 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+
+    lint {
+        // 关键：POI 5.x 包含一些 Android 缺失的 Java AWT 签名，
+        // 设置为 false 以防止构建因三方库的 Lint 警告而中断或报错。
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 }
 

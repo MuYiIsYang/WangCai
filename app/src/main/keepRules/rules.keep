@@ -33,24 +33,39 @@
 # ----------------------------------------------------
 # Apache POI (Excel) & XMLBeans 增强保留规则
 # ----------------------------------------------------
-# 保留所有生成的 Schema 类，防止反射失败
+# 极其重要的保留规则：不要全量保留 org.apache.poi.** 以免触碰缺失的 AWT 签名
+-keep class org.apache.poi.xssf.** { *; }
+-keep class org.apache.poi.ss.** { *; }
+-keep class org.apache.poi.util.** { *; }
+-keep class org.apache.poi.POIXML* { *; }
+-keep class org.apache.poi.openxml4j.** { *; }
+
+-keep class org.apache.xmlbeans.** { *; }
 -keep class org.openxmlformats.schemas.** { *; }
 -keep class schemaorg_apache_xmlbeans.** { *; }
 -keep class com.microsoft.schemas.** { *; }
+-keep class org.apache.poi.schemas.** { *; }
 
-# XMLBeans 关键规则：必须保留 metadata 目录下的所有类及其 typeSystem 静态字段
--keep class org.apache.xmlbeans.metadata.** { *; }
+# 特别保留 TypeSystemHolder 的静态字段，这是 XMLBeans 加载的核心入口
 -keepclassmembers class org.apache.xmlbeans.metadata.** {
     public static *** typeSystem;
 }
+-keepclassmembers class org.apache.poi.schemas.** {
+    public static *** typeSystem;
+}
 
-# 保留 XMLBeans 实现类，防止反射失败
+# 保留实现类和接口
 -keep class org.apache.xmlbeans.impl.** { *; }
+-keep class org.apache.xmlbeans.SchemaTypeSystem { *; }
+-keep class * implements org.apache.xmlbeans.SchemaTypeSystem { *; }
 
-# 允许 POI 访问的内部类
+# 核心：防止 R8 移除或重命名资源文件 (关键是 .xsb 文件)
+-keep class org.apache.poi.xssf.usermodel.** { *; }
+
+# 允许访问内部类和泛型签名
 -keepattributes InnerClasses, Signature, EnclosingMethod
 
-# 屏蔽 Android 环境下缺失的桌面端/OSGi 依赖警告 (POI 引用了很多 Java SE, OSGi and Logging 库)
+# 屏蔽警告 (POI 引用了很多 Java SE 桌面端、OSGi 和各种日志库)
 -dontwarn org.apache.poi.**
 -dontwarn org.apache.xmlbeans.**
 -dontwarn org.openxmlformats.schemas.**
@@ -71,6 +86,13 @@
 -dontwarn org.osgi.service.**
 -dontwarn org.osgi.util.**
 -dontwarn org.apache.logging.log4j.**
+-dontwarn com.fasterxml.woodstox.**
+-dontwarn org.codehaus.stax2.**
+
+# 针对 POI 5.x 引用缺失 AWT 类的补充屏蔽
+-dontwarn org.apache.poi.xslf.**
+-dontwarn org.apache.poi.sl.**
+-dontwarn org.apache.poi.common.usermodel.draw.**
 
 # ----------------------------------------------------
 # Room & SQLite

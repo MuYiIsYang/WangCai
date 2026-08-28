@@ -35,7 +35,7 @@ object TranslationHelper {
         "timestamp" to "时间戳",
         "recordTime" to "记录时间",
         "amount" to "喂食数量",
-        "grossWeight" to "变动数值",
+        "grossWeight" to "上次总重",
         "action" to "动作",
         "method" to "吃喝方式",
         "bowlType" to "食具类型",
@@ -84,7 +84,7 @@ object TranslationHelper {
     fun getColumnOrder(tableName: String): List<String> {
         return when (tableName) {
             "bowls", "食具配置" -> listOf("id", "name", "tareWeight")
-            "consumption_logs", "饮食饮水记录" -> listOf("id", "method", "action", "amount", "recordTime")
+            "consumption_logs", "饮食饮水记录" -> listOf("id", "method", "action", "amount", "grossWeight", "recordTime")
             "weight_logs", "体重记录" -> listOf("id", "weight", "note", "recordTime")
             "medications", "药品库" -> listOf("id", "name", "unit")
             "medication_logs", "用药打卡记录" -> listOf("id", "medicationName", "dosage", "recordTime", "medicationId")

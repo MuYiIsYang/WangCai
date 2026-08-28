@@ -33,7 +33,10 @@ object ExcelManager {
     ) = withContext(Dispatchers.IO) {
         val originalClassLoader = Thread.currentThread().contextClassLoader
         try {
-            Thread.currentThread().contextClassLoader = XSSFWorkbook::class.java.classLoader
+            // 关键：在 Android 上，POI 需要显式设置 ContextClassLoader 才能找到 XMLBeans 的 Schema 资源
+            val poiClassLoader = XSSFWorkbook::class.java.classLoader
+            Thread.currentThread().contextClassLoader = poiClassLoader
+            
             val workbook = XSSFWorkbook()
 
             // 1. 食具配置 (编号, 吃喝碗, 净重)
@@ -47,17 +50,19 @@ object ExcelManager {
                 row.createCell(2).setCellValue(b.tareWeight.toDouble())
             }
 
-            // 2. 饮食饮水记录 (编号, 吃喝方式, 动作, 变动数值, 记录时间)
+            // 2. 饮食饮水记录 (编号, 吃喝方式, 动作, 变动数值, 上次总重, 记录时间)
             val consumptionSheet = workbook.createSheet("饮食饮水记录")
             val consHeader = consumptionSheet.createRow(0)
-            listOf("编号", "吃喝方式", "动作", "变动数值", "记录时间").forEachIndexed { i, s -> consHeader.createCell(i).setCellValue(s) }
+            listOf("编号", "吃喝方式", "动作", "变动数值", "上次总重", "记录时间").forEachIndexed { i, s -> consHeader.createCell(i).setCellValue(s) }
             consumptionLogs.forEachIndexed { index, log ->
                 val row = consumptionSheet.createRow(index + 1)
                 row.createCell(0).setCellValue(log.id)
                 row.createCell(1).setCellValue(log.method)
                 row.createCell(2).setCellValue(log.action)
-                row.createCell(3).setCellValue(log.amount.toDouble())
-                row.createCell(4).setCellValue(log.recordTime)
+                // 显式保留一位小数，消除浮点数噪声
+                row.createCell(3).setCellValue(Math.round(log.amount * 10.0) / 10.0)
+                row.createCell(4).setCellValue(Math.round(log.grossWeight * 10.0) / 10.0)
+                row.createCell(5).setCellValue(log.recordTime)
             }
 
             // 3. 体重记录 (编号, 体重, 备注, 记录时间)
@@ -159,7 +164,9 @@ object ExcelManager {
     suspend fun importData(context: Context, uri: Uri, dao: PetDao) = withContext(Dispatchers.IO) {
         val originalClassLoader = Thread.currentThread().contextClassLoader
         try {
-            Thread.currentThread().contextClassLoader = XSSFWorkbook::class.java.classLoader
+            val poiClassLoader = XSSFWorkbook::class.java.classLoader
+            Thread.currentThread().contextClassLoader = poiClassLoader
+            
             val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
             inputStream?.use { stream ->
                 val workbook = XSSFWorkbook(stream)
@@ -212,12 +219,13 @@ object ExcelManager {
                         val name = getVal(row, m, "吃喝碗", "名称").trim()
                         val tare = getVal(row, m, "净重", "皮重(g)").toFloatOrNull() ?: 0f
                         if (name.isNotBlank()) {
-                            val existing = dao.getBowlByType(if (name.contains("水")) BowlType.WATER else BowlType.FOOD).first()
+                            val type = if (name.contains("水") || name.contains("喝")) BowlType.WATER else BowlType.FOOD
+                            val existing = dao.getBowlByType(type).first()
                             dao.insertBowl(Bowl(
                                 id = existing?.id ?: java.util.UUID.randomUUID().toString(),
                                 name = name,
                                 tareWeight = tare,
-                                type = if (name.contains("水")) BowlType.WATER else BowlType.FOOD
+                                type = type
                             ))
                         }
                     }
@@ -232,6 +240,7 @@ object ExcelManager {
                         val method = getVal(row, m, "吃喝方式", "方式")
                         val action = getVal(row, m, "动作")
                         val amount = getVal(row, m, "变动数值").toFloatOrNull() ?: 0f
+                        val grossWeight = getVal(row, m, "上次总重", "总重").toFloatOrNull() ?: 0f
                         val timeStr = getVal(row, m, "记录时间").replace(" ", "T")
                         
                         if (timeStr.isNotBlank() && dao.countConsumptionLogAt(timeStr) == 0) {
@@ -239,11 +248,12 @@ object ExcelManager {
                                 id = if (id.length > 10) id else java.util.UUID.randomUUID().toString(),
                                 timestamp = timeStr.toTimestamp(),
                                 recordTime = timeStr,
-                                bowlType = if (method.contains("水")) BowlType.WATER else BowlType.FOOD,
+                                bowlType = if (method.contains("水") || method.contains("喝")) BowlType.WATER else BowlType.FOOD,
                                 method = method,
                                 action = action,
                                 amount = amount,
-                                type = when(action) { "增加" -> ConsumptionType.ADD; "减少" -> ConsumptionType.EAT; else -> ConsumptionType.CLEAR }
+                                grossWeight = grossWeight,
+                                type = when(action) { "增加" -> ConsumptionType.ADD; "清空" -> ConsumptionType.CLEAR; else -> ConsumptionType.EAT }
                             ))
                         }
                     }

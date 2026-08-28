@@ -12,17 +12,28 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 object DatabaseMigrations {
 
-    /* 
-    示例：
     val MIGRATION_22_23 = object : Migration(22, 23) {
         override fun migrate(db: SupportSQLiteDatabase) {
-            // 执行 SQL 变更
+            // 防御性处理：检查列是否已经存在，避免重复添加导致闪退
+            val cursor = db.query("PRAGMA table_info(consumption_logs)")
+            var exists = false
+            while (cursor.moveToNext()) {
+                val nameIndex = cursor.getColumnIndex("name")
+                if (nameIndex != -1 && cursor.getString(nameIndex) == "grossWeight") {
+                    exists = true
+                    break
+                }
+            }
+            cursor.close()
+            
+            if (!exists) {
+                db.execSQL("ALTER TABLE consumption_logs ADD COLUMN grossWeight REAL NOT NULL DEFAULT 0")
+            }
         }
     }
-    */
 
     // 所有的手动迁移逻辑汇总
     fun all(): Array<Migration> = arrayOf(
-        // 在此处按顺序添加新的迁移对象，例如：MIGRATION_22_23
+        MIGRATION_22_23
     )
 }

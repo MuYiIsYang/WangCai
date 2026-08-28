@@ -218,10 +218,10 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
                 supabase.fetchTableData<PetProfile>("宠物档案").forEach { dao.insertPetProfile(it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true)) }
                 supabase.fetchTableData<Medication>("药品库").forEach { dao.insertMedication(it.copy(isSynced = true)) }
                 supabase.fetchTableData<Snack>("零食库").forEach { dao.insertSnack(it.copy(isSynced = true)) }
-                supabase.fetchTableData<Bowl>("食具配置").forEach { dao.insertBowl(it.copy(type = if (it.name.contains("水")) BowlType.WATER else BowlType.FOOD, isSynced = true)) }
+                supabase.fetchTableData<Bowl>("食具配置").forEach { dao.insertBowl(it.copy(type = if (it.name.contains("水") || it.name.contains("喝")) BowlType.WATER else BowlType.FOOD, isSynced = true)) }
                 downloadTable<MedicationLog>("用药打卡记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
                 downloadTable<SnackLog>("零食打卡记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
-                downloadTable<ConsumptionLog>("饮食饮水记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true, type = if(it.action=="增加") ConsumptionType.ADD else ConsumptionType.EAT, bowlType = if (it.method.contains("水")) BowlType.WATER else BowlType.FOOD) }
+                downloadTable<ConsumptionLog>("饮食饮水记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true, type = when(it.action) { "增加" -> ConsumptionType.ADD; "清空" -> ConsumptionType.CLEAR; else -> ConsumptionType.EAT }, bowlType = if (it.method.contains("水") || it.method.contains("喝")) BowlType.WATER else BowlType.FOOD) }
                 downloadTable<WeightLog>("体重记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
                 downloadTable<ExcretionLog>("拉撒记录", filter, pendingTasks) { it.copy(timestamp = it.recordTime.toTimestamp(), isSynced = true) }
                 addActivityLog("SYNC", "Cloud", "Download complete")
@@ -331,9 +331,20 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
                 val lastGross = if ((lastLog?.grossWeight ?: 0f) > 0f) lastLog!!.grossWeight else tare
                 val ts = generateTimestamp(targetDate)
                 val diff = if (isFromEmpty) grossWeight - tare else grossWeight - lastGross
-                val rounded = kotlin.math.round(diff * 10f) / 10f
-                if (rounded != 0f) {
-                    val log = ConsumptionLog(timestamp = ts, amount = rounded, grossWeight = grossWeight, type = if (rounded > 0) ConsumptionType.ADD else ConsumptionType.EAT, bowlType = type, action = if (rounded > 0) "增加" else "减少", method = if (rounded > 0) (if(type==BowlType.FOOD) "添加饮食" else "添加饮水") else (if(type==BowlType.FOOD) "吃吃" else "喝喝"), isSynced = false)
+                val roundedAmount = kotlin.math.round(diff * 10f) / 10f
+                val roundedGross = kotlin.math.round(grossWeight * 10f) / 10f
+                
+                if (roundedAmount != 0f) {
+                    val log = ConsumptionLog(
+                        timestamp = ts, 
+                        amount = roundedAmount, 
+                        grossWeight = roundedGross, 
+                        type = if (roundedAmount > 0) ConsumptionType.ADD else ConsumptionType.EAT, 
+                        bowlType = type, 
+                        action = if (roundedAmount > 0) "增加" else "减少", 
+                        method = if (roundedAmount > 0) (if(type==BowlType.FOOD) "添加饮食" else "添加饮水") else (if(type==BowlType.FOOD) "吃吃" else "喝喝"), 
+                        isSynced = false
+                    )
                     handleSyncDecision("饮食饮水记录", "ADD", log)
                 }
             }

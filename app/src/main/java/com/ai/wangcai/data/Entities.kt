@@ -77,7 +77,7 @@ data class ConsumptionLog(
     @Transient val timestamp: Long = 0,
     @SerialName("记录时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
     @SerialName("变动数值") val amount: Float,
-    @Transient val grossWeight: Float = 0f,
+    @SerialName("上次总重") val grossWeight: Float = 0f,
     @SerialName("动作") val action: String = "",       
     @SerialName("吃喝方式") val method: String = "",   
     @Transient val type: ConsumptionType = ConsumptionType.ADD,

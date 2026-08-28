@@ -43,10 +43,8 @@ import com.ai.wangcai.ui.StatsScreen
 import com.ai.wangcai.ui.SupabaseManagerScreen
 import com.ai.wangcai.util.BackupWorker
 import com.ai.wangcai.viewmodel.PetViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
-import kotlin.time.Duration.Companion.milliseconds
 import android.content.ClipData
 import android.os.Environment
 import java.io.File
@@ -87,143 +85,132 @@ class MainActivity : ComponentActivity() {
         val colorBackground = Color.White 
 
         setContent {
-            var showSplash by remember { mutableStateOf(true) }
-            
-            LaunchedEffect(Unit) {
-                delay(500.milliseconds) // 固定显示 0.5 秒
-                showSplash = false
-            }
-
             MaterialTheme {
-                if (showSplash) {
-                    SplashView()
-                } else {
-                    val viewModel: PetViewModel = viewModel()
-                    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-                    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-                    
-                    var currentTab by rememberSaveable { mutableIntStateOf(0) }
-                    var dashboardKey by rememberSaveable { mutableLongStateOf(0L) }
-                    var showSupabaseManager by rememberSaveable { mutableStateOf(false) }
+                val viewModel: PetViewModel = viewModel()
+                val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+                val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                
+                var currentTab by rememberSaveable { mutableIntStateOf(0) }
+                var dashboardKey by rememberSaveable { mutableLongStateOf(0L) }
+                var showSupabaseManager by rememberSaveable { mutableStateOf(false) }
 
-                    // 全局 Supabase 配置弹窗状态
-                    var showSupabaseConfigDialog by rememberSaveable { mutableStateOf(false) }
+                // 全局 Supabase 配置弹窗状态
+                var showSupabaseConfigDialog by rememberSaveable { mutableStateOf(false) }
 
-                    // 监听全局重定向事件 (自动弹出配置)
-                    LaunchedEffect(Unit) {
-                        viewModel.redirectionEvent.collect { reason ->
-                            if (reason == "CONFIG_NEEDED") {
-                                showSupabaseConfigDialog = true
+                // 监听全局重定向事件 (自动弹出配置)
+                LaunchedEffect(Unit) {
+                    viewModel.redirectionEvent.collect { reason ->
+                        if (reason == "CONFIG_NEEDED") {
+                            showSupabaseConfigDialog = true
+                        }
+                    }
+                }
+
+                if (showSupabaseManager) {
+                    BackHandler {
+                        showSupabaseManager = false
+                    }
+                }
+                
+                if (showSupabaseConfigDialog) {
+                    GlobalSupabaseConfigDialog(
+                        viewModel = viewModel,
+                        onDismiss = { showSupabaseConfigDialog = false }
+                    )
+                }
+
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    containerColor = colorBackground,
+                    contentColor = Color.Black,
+                    bottomBar = {
+                        if (!isLandscape && !showSupabaseManager) {
+                            NavigationBar(containerColor = Color.White) {
+                                NavigationBarItem(
+                                    selected = currentTab == 0,
+                                    onClick = { 
+                                        if (currentTab == 0) dashboardKey = System.currentTimeMillis()
+                                        currentTab = 0 
+                                    },
+                                    icon = { Icon(Icons.Default.Home, null) },
+                                    label = { Text("首页") },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = colorDeep,
+                                        selectedTextColor = colorDeep,
+                                        indicatorColor = colorLight.copy(alpha = 0.3f)
+                                    )
+                                )
+                                NavigationBarItem(
+                                    selected = currentTab == 1,
+                                    onClick = { currentTab = 1 },
+                                    icon = { Icon(Icons.Default.BarChart, null) },
+                                    label = { Text("统计") },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = colorDeep,
+                                        selectedTextColor = colorDeep,
+                                        indicatorColor = colorLight.copy(alpha = 0.3f)
+                                    )
+                                )
                             }
                         }
                     }
-
-                    if (showSupabaseManager) {
-                        BackHandler {
-                            showSupabaseManager = false
-                        }
-                    }
-                    
-                    if (showSupabaseConfigDialog) {
-                        GlobalSupabaseConfigDialog(
-                            viewModel = viewModel,
-                            onDismiss = { showSupabaseConfigDialog = false }
-                        )
-                    }
-
-                    Scaffold(
-                        modifier = Modifier.fillMaxSize(),
-                        containerColor = colorBackground,
-                        contentColor = Color.Black,
-                        bottomBar = {
-                            if (!isLandscape && !showSupabaseManager) {
-                                NavigationBar(containerColor = Color.White) {
-                                    NavigationBarItem(
-                                        selected = currentTab == 0,
-                                        onClick = { 
-                                            if (currentTab == 0) dashboardKey = System.currentTimeMillis()
-                                            currentTab = 0 
-                                        },
-                                        icon = { Icon(Icons.Default.Home, null) },
-                                        label = { Text("首页") },
-                                        colors = NavigationBarItemDefaults.colors(
-                                            selectedIconColor = colorDeep,
-                                            selectedTextColor = colorDeep,
-                                            indicatorColor = colorLight.copy(alpha = 0.3f)
-                                        )
-                                    )
-                                    NavigationBarItem(
-                                        selected = currentTab == 1,
-                                        onClick = { currentTab = 1 },
-                                        icon = { Icon(Icons.Default.BarChart, null) },
-                                        label = { Text("统计") },
-                                        colors = NavigationBarItemDefaults.colors(
-                                            selectedIconColor = colorDeep,
-                                            selectedTextColor = colorDeep,
-                                            indicatorColor = colorLight.copy(alpha = 0.3f)
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    ) { innerPadding ->
-                        Row(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                            // 主内容区
-                            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                                if (showSupabaseManager) {
-                                    SupabaseManagerScreen(viewModel)
-                                } else {
-                                    when(currentTab) {
-                                        0 -> key(currentTab, dashboardKey) { 
-                                            DashboardScreen(
-                                                viewModel = viewModel, 
-                                                onSupabaseConfigClick = { showSupabaseConfigDialog = true }
-                                            ) 
-                                        }
-                                        1 -> StatsScreen(viewModel)
+                ) { innerPadding ->
+                    Row(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                        // 主内容区
+                        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                            if (showSupabaseManager) {
+                                SupabaseManagerScreen(viewModel)
+                            } else {
+                                when(currentTab) {
+                                    0 -> key(currentTab, dashboardKey) { 
+                                        DashboardScreen(
+                                            viewModel = viewModel, 
+                                            onSupabaseConfigClick = { showSupabaseConfigDialog = true }
+                                        ) 
                                     }
+                                    1 -> StatsScreen(viewModel)
                                 }
                             }
-                            
-                            // 横屏下的右侧纵向导航
-                            if (isLandscape && !showSupabaseManager) {
-                                NavigationRail(
-                                    containerColor = Color.White,
-                                    modifier = Modifier.fillMaxHeight(),
-                                    header = {
-                                        Image(
-                                            painter = painterResource(id = R.drawable.logo),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(40.dp).padding(vertical = 8.dp)
-                                        )
-                                    }
-                                ) {
-                                    NavigationRailItem(
-                                        selected = currentTab == 0,
-                                        onClick = { 
-                                            if (currentTab == 0) dashboardKey = System.currentTimeMillis()
-                                            currentTab = 0 
-                                        },
-                                        icon = { Icon(Icons.Default.Home, null) },
-                                        label = { Text("首页") },
-                                        colors = NavigationRailItemDefaults.colors(
-                                            selectedIconColor = colorDeep,
-                                            selectedTextColor = colorDeep,
-                                            indicatorColor = colorLight.copy(alpha = 0.3f)
-                                        )
-                                    )
-                                    NavigationRailItem(
-                                        selected = currentTab == 1,
-                                        onClick = { currentTab = 1 },
-                                        icon = { Icon(Icons.Default.BarChart, null) },
-                                        label = { Text("统计") },
-                                        colors = NavigationRailItemDefaults.colors(
-                                            selectedIconColor = colorDeep,
-                                            selectedTextColor = colorDeep,
-                                            indicatorColor = colorLight.copy(alpha = 0.3f)
-                                        )
+                        }
+                        
+                        // 横屏下的右侧纵向导航
+                        if (isLandscape && !showSupabaseManager) {
+                            NavigationRail(
+                                containerColor = Color.White,
+                                modifier = Modifier.fillMaxHeight(),
+                                header = {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.logo),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(40.dp).padding(vertical = 8.dp)
                                     )
                                 }
+                            ) {
+                                NavigationRailItem(
+                                    selected = currentTab == 0,
+                                    onClick = { 
+                                        if (currentTab == 0) dashboardKey = System.currentTimeMillis()
+                                        currentTab = 0 
+                                    },
+                                    icon = { Icon(Icons.Default.Home, null) },
+                                    label = { Text("首页") },
+                                    colors = NavigationRailItemDefaults.colors(
+                                        selectedIconColor = colorDeep,
+                                        selectedTextColor = colorDeep,
+                                        indicatorColor = colorLight.copy(alpha = 0.3f)
+                                    )
+                                )
+                                NavigationRailItem(
+                                    selected = currentTab == 1,
+                                    onClick = { currentTab = 1 },
+                                    icon = { Icon(Icons.Default.BarChart, null) },
+                                    label = { Text("统计") },
+                                    colors = NavigationRailItemDefaults.colors(
+                                        selectedIconColor = colorDeep,
+                                        selectedTextColor = colorDeep,
+                                        indicatorColor = colorLight.copy(alpha = 0.3f)
+                                    )
+                                )
                             }
                         }
                     }
@@ -474,31 +461,4 @@ CREATE TABLE IF NOT EXISTS "public"."饮食饮水记录" (
 }
 
 
-@Composable
-fun SplashView() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.White),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.logo),
-                contentDescription = null,
-                modifier = Modifier.size(100.dp),
-                contentScale = ContentScale.Fit
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "旺财",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF659287)
-            )
-        }
-    }
-}
+

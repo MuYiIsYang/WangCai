@@ -8,7 +8,7 @@ import androidx.room.TypeConverters
 
 @Database(
     entities = [Bowl::class, ConsumptionLog::class, WeightLog::class, Medication::class, MedicationLog::class, ExcretionLog::class, Snack::class, SnackLog::class, ActivityLog::class, PetProfile::class, SyncLog::class, PendingSyncTask::class],
-    version = 22,
+    version = 23,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -27,7 +27,7 @@ abstract class PetDatabase : RoomDatabase() {
                     "pet_database"
                 )
                 .addMigrations(*DatabaseMigrations.all()) // 加载所有手动迁移逻辑
-                .fallbackToDestructiveMigration() // 兜底策略：若找不到迁移路径则重建数据库
+                .fallbackToDestructiveMigration(dropAllTables = true) // 兜底策略：若找不到迁移路径则重建数据库
                 .build()
                 INSTANCE = instance
                 instance
