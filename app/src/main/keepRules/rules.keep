@@ -93,6 +93,15 @@
 -dontwarn org.apache.poi.xslf.**
 -dontwarn org.apache.poi.sl.**
 -dontwarn org.apache.poi.common.usermodel.draw.**
+-dontwarn java.awt.**
+-dontwarn javax.swing.**
+
+# 彻底关闭 R8 对这些包的提示和警告，抑制“does not type check”输出
+-dontnote org.apache.poi.**
+-dontnote org.apache.xmlbeans.**
+-dontnote org.openxmlformats.schemas.**
+-dontnote java.awt.**
+-dontnote javax.swing.**
 
 # ----------------------------------------------------
 # Room & SQLite
