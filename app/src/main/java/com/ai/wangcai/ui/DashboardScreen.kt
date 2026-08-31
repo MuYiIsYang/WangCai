@@ -1204,60 +1204,74 @@ fun WheelDateTimePickerDialog(
     var selectedDate by remember { mutableStateOf(dates.find { isSameDay(it, initialDateTime) } ?: dates[30]) }
     var selectedHour by remember { mutableIntStateOf(initialDateTime.get(Calendar.HOUR_OF_DAY)) }
     var selectedMinute by remember { mutableIntStateOf(initialDateTime.get(Calendar.MINUTE)) }
+    
+    // 新增：用于强制刷新滚轮位置的 key
+    var pickerKey by remember { mutableIntStateOf(0) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择记录时间", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = DeepGreen) },
         text = {
-            Row(
-                modifier = Modifier.fillMaxWidth().height(120.dp), 
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                WheelPicker(
-                    items = dates,
-                    initialIndex = dates.indexOfFirst { isSameDay(it, initialDateTime) }.coerceAtLeast(0),
-                    onItemSelected = { selectedDate = it },
-                    modifier = Modifier.weight(2.5f),
-                    label = { cal ->
-                        val today = Calendar.getInstance()
-                        val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-                        when {
-                            isSameDay(cal, today) -> "今天"
-                            isSameDay(cal, yesterday) -> "昨天"
-                            else -> SimpleDateFormat("MM月dd日", Locale.CHINA).format(cal.time)
+            key(pickerKey) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(120.dp), 
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    WheelPicker(
+                        items = dates,
+                        initialIndex = dates.indexOfFirst { isSameDay(it, selectedDate) }.coerceAtLeast(0),
+                        onItemSelected = { selectedDate = it },
+                        modifier = Modifier.weight(2.5f),
+                        label = { cal ->
+                            val today = Calendar.getInstance()
+                            val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+                            when {
+                                isSameDay(cal, today) -> "今天"
+                                isSameDay(cal, yesterday) -> "昨天"
+                                else -> SimpleDateFormat("MM月dd日", Locale.CHINA).format(cal.time)
+                            }
                         }
-                    }
-                )
-                WheelPicker(
-                    items = hours,
-                    initialIndex = hours.indexOf(initialDateTime.get(Calendar.HOUR_OF_DAY)).coerceAtLeast(0),
-                    onItemSelected = { selectedHour = it },
-                    modifier = Modifier.weight(1f),
-                    label = { "%02d".format(it) }
-                )
-                Text(":", fontWeight = FontWeight.Bold, color = DeepGreen)
-                WheelPicker(
-                    items = minutes,
-                    initialIndex = minutes.indexOf(initialDateTime.get(Calendar.MINUTE)).coerceAtLeast(0),
-                    onItemSelected = { selectedMinute = it },
-                    modifier = Modifier.weight(1f),
-                    label = { "%02d".format(it) }
-                )
+                    )
+                    WheelPicker(
+                        items = hours,
+                        initialIndex = hours.indexOf(selectedHour).coerceAtLeast(0),
+                        onItemSelected = { selectedHour = it },
+                        modifier = Modifier.weight(1f),
+                        label = { "%02d".format(it) }
+                    )
+                    Text(":", fontWeight = FontWeight.Bold, color = DeepGreen)
+                    WheelPicker(
+                        items = minutes,
+                        initialIndex = minutes.indexOf(selectedMinute).coerceAtLeast(0),
+                        onItemSelected = { selectedMinute = it },
+                        modifier = Modifier.weight(1f),
+                        label = { "%02d".format(it) }
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val result = (selectedDate.clone() as Calendar).apply {
-                    set(Calendar.HOUR_OF_DAY, selectedHour)
-                    set(Calendar.MINUTE, selectedMinute)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }
-                onConfirm(result)
-            }) { Text("确定", color = DeepGreen) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = {
+                    val now = Calendar.getInstance()
+                    selectedDate = dates.find { isSameDay(it, now) } ?: dates[30]
+                    selectedHour = now.get(Calendar.HOUR_OF_DAY)
+                    selectedMinute = now.get(Calendar.MINUTE)
+                    pickerKey++ // 触发 key 变化，让滚轮重置到“此刻”
+                }) { Text("此刻", color = DeepGreen) }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = {
+                    val result = (selectedDate.clone() as Calendar).apply {
+                        set(Calendar.HOUR_OF_DAY, selectedHour)
+                        set(Calendar.MINUTE, selectedMinute)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
+                    onConfirm(result)
+                }) { Text("确定", color = DeepGreen) }
+            }
+        }
     )
 }
 
@@ -1713,7 +1727,18 @@ fun ExcretionLogDialog(onConfirm: (ExcretionType, String?, Calendar) -> Unit, on
     var selectedType by remember { mutableStateOf(ExcretionType.POOP) }
     var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
     var isManualTime by remember { mutableStateOf(false) }
-    val shapes = if (selectedType == ExcretionType.POOP) listOf("正常", "软便", "稀便") else listOf("尿多", "正常", "尿少")
+
+    val poopOptions = listOf(
+        Triple("正常", R.drawable.ic_poop, PoopColor),
+        Triple("软便", R.drawable.ic_poop_soft, PoopColor),
+        Triple("稀便", R.drawable.ic_poop_watery, PoopColor)
+    )
+    val peeOptions = listOf(
+        Triple("正常", R.drawable.ic_pee, PeeColor),
+        Triple("尿多", R.drawable.ic_pee_heavy, PeeColor),
+        Triple("尿少", R.drawable.ic_pee_light, PeeColor)
+    )
+    val currentOptions = if (selectedType == ExcretionType.POOP) poopOptions else peeOptions
     
     LaunchedEffect(initialDate) {
         if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
@@ -1756,29 +1781,36 @@ fun ExcretionLogDialog(onConfirm: (ExcretionType, String?, Calendar) -> Unit, on
 
                 HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
 
-                // 状况选择层 (优化为一排三个单选按钮)
+                // 状况选择层 (图片 + 文字 纵向排列)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("状况如何?", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        shapes.forEach { shape ->
-                            Box(
-                                contentAlignment = Alignment.Center,
+                        currentOptions.forEach { (label, resId, color) ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(42.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(if(selectedType == ExcretionType.POOP) PoopColor else PeeColor)
-                                    .clickable { onConfirm(selectedType, shape, selectedDateTime); onDismiss() }
+                                    .background(color.copy(alpha = 0.1f))
+                                    .clickable { onConfirm(selectedType, label, selectedDateTime); onDismiss() }
+                                    .padding(vertical = 8.dp)
                             ) {
+                                Image(
+                                    painter = painterResource(resId),
+                                    contentDescription = label,
+                                    modifier = Modifier.size(40.dp),
+                                    contentScale = ContentScale.Fit
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = shape,
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 13.sp
+                                    text = label,
+                                    color = color,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
                                 )
                             }
                         }
