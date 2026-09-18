@@ -12,6 +12,8 @@ object TranslationHelper {
         "snack_logs" to "零食打卡记录",
         "activity_logs" to "操作记录",
         "pet_profiles" to "宠物档案",
+        "deworming_logs" to "驱虫记录",
+        "驱虫记录" to "驱虫记录",
         "食具配置" to "食具配置",
         "饮食饮水记录" to "饮食饮水记录",
         "体重记录" to "体重记录",
@@ -55,14 +57,18 @@ object TranslationHelper {
         "birthday" to "生日",
         "avatarPath" to "头像路径",
         "createdAt" to "记录时间",
-        "编号" to "编号"
+        "编号" to "编号",
+        "驱虫类型" to "驱虫类型"
     )
 
     fun translateTable(name: String): String {
         return tableMap[name] ?: name
     }
 
-    fun translateColumn(name: String): String {
+    fun translateColumn(name: String, tableName: String? = null): String {
+        if (name == "type" && (tableName == "deworming_logs" || tableName == "驱虫记录")) {
+            return "驱虫类型"
+        }
         return columnMap[name] ?: name
     }
 
@@ -70,6 +76,8 @@ object TranslationHelper {
         return when (value) {
             "POOP" -> "拉屎"
             "PEE" -> "撒尿"
+            "INTERNAL" -> "内驱"
+            "EXTERNAL" -> "外驱"
             "ADD" -> "增加"
             "EAT" -> "减少"
             "CLEAR" -> "清空"
@@ -89,6 +97,7 @@ object TranslationHelper {
             "medications", "药品库" -> listOf("id", "name", "unit")
             "medication_logs", "用药打卡记录" -> listOf("id", "medicationName", "dosage", "recordTime", "medicationId")
             "excretion_logs", "拉撒记录" -> listOf("id", "type", "shape", "recordTime")
+            "deworming_logs", "驱虫记录" -> listOf("id", "type", "recordTime")
             "snacks", "零食库" -> listOf("id", "name", "unit")
             "snack_logs", "零食打卡记录" -> listOf("id", "snackName", "amount", "recordTime", "snackId")
             "pet_profiles", "宠物档案" -> listOf("id", "nickname", "breed", "birthday", "recordTime")

@@ -7,8 +7,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [Bowl::class, ConsumptionLog::class, WeightLog::class, Medication::class, MedicationLog::class, ExcretionLog::class, Snack::class, SnackLog::class, ActivityLog::class, PetProfile::class, SyncLog::class, PendingSyncTask::class],
-    version = 23,
+    entities = [Bowl::class, ConsumptionLog::class, WeightLog::class, Medication::class, MedicationLog::class, ExcretionLog::class, DewormingLog::class, Snack::class, SnackLog::class, ActivityLog::class, PetProfile::class, SyncLog::class, PendingSyncTask::class],
+    version = 24,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

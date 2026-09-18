@@ -140,6 +140,22 @@ enum class ExcretionType {
 }
 
 @Serializable
+@Entity(tableName = "deworming_logs")
+data class DewormingLog(
+    @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    @Transient val timestamp: Long = 0,
+    @SerialName("记录时间") val recordTime: String = if (timestamp == 0L) "" else timestamp.toDbTime(),
+    @SerialName("驱虫类型") val type: DewormingType,
+    @Transient val isSynced: Boolean = false
+)
+
+@Serializable
+enum class DewormingType {
+    @SerialName("内驱") INTERNAL,
+    @SerialName("外驱") EXTERNAL
+}
+
+@Serializable
 @Entity(tableName = "snacks")
 data class Snack(
     @SerialName("编号") @PrimaryKey val id: String = UUID.randomUUID().toString(),
@@ -202,7 +218,8 @@ data class DataSnapshot(
     val excretionLogs: List<ExcretionLog>,
     val snacks: List<Snack>,
     val snackLogs: List<SnackLog>,
-    val petProfile: PetProfile?
+    val petProfile: PetProfile?,
+    val dewormingLogs: List<DewormingLog> = emptyList()
 )
 
 data class SupabaseConfig(

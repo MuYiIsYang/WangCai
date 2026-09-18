@@ -32,8 +32,24 @@ object DatabaseMigrations {
         }
     }
 
+    val MIGRATION_23_24 = object : Migration(23, 24) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `deworming_logs` (
+                    `id` TEXT NOT NULL,
+                    `timestamp` INTEGER NOT NULL,
+                    `recordTime` TEXT NOT NULL,
+                    `type` TEXT NOT NULL,
+                    `isSynced` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+            """.trimIndent())
+        }
+    }
+
     // 所有的手动迁移逻辑汇总
     fun all(): Array<Migration> = arrayOf(
-        MIGRATION_22_23
+        MIGRATION_22_23,
+        MIGRATION_23_24
     )
 }

@@ -29,7 +29,8 @@ object ExcelManager {
         snacks: List<Snack>,
         snackLogs: List<SnackLog>,
         petProfile: PetProfile? = null,
-        outputFile: File? = null
+        outputFile: File? = null,
+        dewormingLogs: List<DewormingLog> = emptyList()
     ) = withContext(Dispatchers.IO) {
         val originalClassLoader = Thread.currentThread().contextClassLoader
         try {
@@ -111,6 +112,17 @@ object ExcelManager {
                 row.createCell(1).setCellValue(if (log.type == ExcretionType.POOP) "拉屎" else "撒尿")
                 row.createCell(2).setCellValue(log.shape ?: "")
                 row.createCell(3).setCellValue(log.recordTime)
+            }
+
+            // 6.5. 驱虫记录 (编号, 驱虫类型, 记录时间)
+            val dewormingSheet = workbook.createSheet("驱虫记录")
+            val dewormingHeader = dewormingSheet.createRow(0)
+            listOf("编号", "驱虫类型", "记录时间").forEachIndexed { i, s -> dewormingHeader.createCell(i).setCellValue(s) }
+            dewormingLogs.forEachIndexed { index, log ->
+                val row = dewormingSheet.createRow(index + 1)
+                row.createCell(0).setCellValue(log.id)
+                row.createCell(1).setCellValue(if (log.type == DewormingType.INTERNAL) "内驱" else "外驱")
+                row.createCell(2).setCellValue(log.recordTime)
             }
 
             // 7. 零食库 (编号, 零食名称, 计量单位)
@@ -346,6 +358,25 @@ object ExcelManager {
                     }
                 }
 
+                // 5.5. 驱虫记录
+                workbook.getSheet("驱虫记录")?.let { sheet ->
+                    val m = getHeaderMap(sheet)
+                    for (i in 1..sheet.lastRowNum) {
+                        val row = sheet.getRow(i) ?: continue
+                        val id = getVal(row, m, "编号")
+                        val typeStr = getVal(row, m, "驱虫类型")
+                        val timeStr = getVal(row, m, "记录时间").replace(" ", "T")
+                        if (timeStr.isNotBlank() && dao.countDewormingLogAt(timeStr) == 0) {
+                            dao.insertDewormingLog(DewormingLog(
+                                id = if (id.length > 10) id else java.util.UUID.randomUUID().toString(),
+                                timestamp = timeStr.toTimestamp(),
+                                recordTime = timeStr,
+                                type = if (typeStr == "外驱") DewormingType.EXTERNAL else DewormingType.INTERNAL
+                            ))
+                        }
+                    }
+                }
+
                 // 6. 零食相关
                 workbook.getSheet("零食库")?.let { sheet ->
                     val m = getHeaderMap(sheet)
@@ -421,7 +452,8 @@ object ExcelManager {
     suspend fun performAutoBackup(context: Context, 
                            bowls: List<Bowl>, cLogs: List<ConsumptionLog>, wLogs: List<WeightLog>, 
                            meds: List<Medication>, mLogs: List<MedicationLog>, eLogs: List<ExcretionLog>,
-                           snacks: List<Snack>, sLogs: List<SnackLog>, petProfile: PetProfile?) = withContext(Dispatchers.IO) {
+                           snacks: List<Snack>, sLogs: List<SnackLog>, petProfile: PetProfile?,
+                           dLogs: List<DewormingLog> = emptyList()) = withContext(Dispatchers.IO) {
         
         val fileName = "自动_${SimpleDateFormat("MMdd_HHmmss", Locale.CHINA).format(Date())}.xlsx"
         val resolver = context.contentResolver
@@ -434,14 +466,14 @@ object ExcelManager {
         try {
             val uri = resolver.insert(collection, contentValues)
             if (uri != null) {
-                exportData(context, uri, bowls, cLogs, wLogs, meds, mLogs, eLogs, snacks, sLogs, petProfile, null)
+                exportData(context, uri, bowls, cLogs, wLogs, meds, mLogs, eLogs, snacks, sLogs, petProfile, null, dLogs)
                 cleanupOldAutoBackups(context)
             }
         } catch (_: Exception) {
             val backupDir = File(context.getExternalFilesDir(null), "autobackups")
             if (!backupDir.exists()) backupDir.mkdirs()
             val file = File(backupDir, fileName)
-            exportData(context, null, bowls, cLogs, wLogs, meds, mLogs, eLogs, snacks, sLogs, petProfile, file)
+            exportData(context, null, bowls, cLogs, wLogs, meds, mLogs, eLogs, snacks, sLogs, petProfile, file, dLogs)
         }
         context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE).edit {
             putLong("last_auto_backup", System.currentTimeMillis())

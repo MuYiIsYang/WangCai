@@ -123,6 +123,13 @@ CREATE TABLE "public"."饮食饮水记录" (
     "上次总重" numeric DEFAULT 0,
     "记录时间" timestamp without time zone NOT NULL
 );
+
+-- 10. 驱虫记录
+CREATE TABLE "public"."驱虫记录" (
+    "编号" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "驱虫类型" text NOT NULL,
+    "记录时间" timestamp without time zone NOT NULL
+);
 ```
 
 ### 3. 在 App 中配置连接

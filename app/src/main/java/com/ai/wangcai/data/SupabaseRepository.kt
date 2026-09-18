@@ -36,6 +36,7 @@ class SupabaseRepository {
                 is WeightLog -> jsonSerializer.encodeToJsonElement(data)
                 is MedicationLog -> jsonSerializer.encodeToJsonElement(data)
                 is ExcretionLog -> jsonSerializer.encodeToJsonElement(data)
+                is DewormingLog -> jsonSerializer.encodeToJsonElement(data)
                 is SnackLog -> jsonSerializer.encodeToJsonElement(data)
                 is Medication -> jsonSerializer.encodeToJsonElement(data)
                 is Snack -> jsonSerializer.encodeToJsonElement(data)

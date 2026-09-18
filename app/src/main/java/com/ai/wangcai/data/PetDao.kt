@@ -102,6 +102,25 @@ interface PetDao {
     @Query("SELECT COUNT(*) FROM excretion_logs WHERE recordTime = :recordTime")
     suspend fun countExcretionLogAt(recordTime: String): Int
 
+    // DewormingLog
+    @Query("SELECT * FROM deworming_logs ORDER BY recordTime DESC")
+    fun getAllDewormingLogs(): Flow<List<DewormingLog>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDewormingLog(log: DewormingLog)
+
+    @Update
+    suspend fun updateDewormingLog(log: DewormingLog)
+
+    @Delete
+    suspend fun deleteDewormingLog(log: DewormingLog)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun updateDewormingLogs(logs: List<DewormingLog>)
+
+    @Query("SELECT COUNT(*) FROM deworming_logs WHERE recordTime = :recordTime")
+    suspend fun countDewormingLogAt(recordTime: String): Int
+
     // Snack
     @Query("SELECT * FROM snacks")
     fun getAllSnacks(): Flow<List<Snack>>
@@ -170,6 +189,9 @@ interface PetDao {
     @Query("SELECT * FROM excretion_logs WHERE id = :id")
     suspend fun getExcretionLogById(id: String): ExcretionLog?
 
+    @Query("SELECT * FROM deworming_logs WHERE id = :id")
+    suspend fun getDewormingLogById(id: String): DewormingLog?
+
     @Query("SELECT * FROM snack_logs WHERE id = :id")
     suspend fun getSnackLogById(id: String): SnackLog?
 
@@ -207,6 +229,6 @@ interface PetDao {
     @Query("SELECT COUNT(*) FROM pending_tasks")
     fun getPendingTasksCount(): Flow<Int>
 
-    @Query("SELECT (SELECT COUNT(*) FROM consumption_logs) + (SELECT COUNT(*) FROM weight_logs) + (SELECT COUNT(*) FROM medication_logs) + (SELECT COUNT(*) FROM excretion_logs) + (SELECT COUNT(*) FROM snack_logs)")
+    @Query("SELECT (SELECT COUNT(*) FROM consumption_logs) + (SELECT COUNT(*) FROM weight_logs) + (SELECT COUNT(*) FROM medication_logs) + (SELECT COUNT(*) FROM excretion_logs) + (SELECT COUNT(*) FROM deworming_logs) + (SELECT COUNT(*) FROM snack_logs)")
     suspend fun getTotalRecordCount(): Int
 }

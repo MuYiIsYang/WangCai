@@ -87,6 +87,7 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
     var showWeightDialog by remember { mutableStateOf(false) }
     var showMedLogDialog by remember { mutableStateOf(false) }
     var showAddMedTypeDialog by remember { mutableStateOf(false) }
+    var showDewormingDialog by remember { mutableStateOf(false) }
     var showExcretionDialog by remember { mutableStateOf(false) }
     var showSnackLogDialog by remember { mutableStateOf(false) }
     var showAddSnackTypeDialog by remember { mutableStateOf(false) }
@@ -142,7 +143,9 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
                     snapshot.excretionLogs,
                     snapshot.snacks,
                     snapshot.snackLogs,
-                    snapshot.petProfile
+                    snapshot.petProfile,
+                    null,
+                    snapshot.dewormingLogs
                 )
                 android.widget.Toast.makeText(context, "备份成功", android.widget.Toast.LENGTH_SHORT).show()
             }
@@ -353,6 +356,10 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
                 .padding(if (isLandscape) 16.dp else 24.dp)
         ) {
             val menuContent = @Composable {
+                FabMenuItem("驱虫", painterResource(R.drawable.ic_deworm), isLandscape) {
+                    showDewormingDialog = true
+                    showFabMenu = false
+                }
                 FabMenuItem("拉屎撒尿", painterResource(R.drawable.ic_poop), isLandscape) {
                     showExcretionDialog = true
                     showFabMenu = false
@@ -498,6 +505,14 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
         AddMedTypeDialog(
             onConfirm = { name, unit -> viewModel.addMedication(name, unit) },
             onDismiss = { showAddMedTypeDialog = false }
+        )
+    }
+
+    if (showDewormingDialog) {
+        DewormingLogDialog(
+            onConfirm = { type, date -> viewModel.addDewormingLog(type, date) },
+            onDismiss = { showDewormingDialog = false },
+            initialDate = additionInitialDate
         )
     }
 
@@ -895,11 +910,12 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
     val weightLogs by viewModel.weightLogs.collectAsState()
     val medLogs by viewModel.medicationLogs.collectAsState()
     val excretionLogs by viewModel.excretionLogs.collectAsState()
+    val dewormingLogs by viewModel.dewormingLogs.collectAsState()
     val snacks by viewModel.snacks.collectAsState()
     val snackLogs by viewModel.snackLogs.collectAsState()
     val medications by viewModel.medications.collectAsState()
 
-    val dailyRecords = remember(date, foodLogs, waterLogs, weightLogs, medLogs, excretionLogs, snackLogs) {
+    val dailyRecords = remember(date, foodLogs, waterLogs, weightLogs, medLogs, excretionLogs, dewormingLogs, snackLogs) {
         val list = mutableListOf<RecordItem>()
         foodLogs.filter { isSameDay(it.timestamp, date) }.forEach { 
             val (typeStr, resId, color) = when(it.type) {
@@ -929,6 +945,11 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
         excretionLogs.filter { isSameDay(it.timestamp, date) }.forEach {
             val (typeStr, resId, color) = if(it.type == ExcretionType.POOP) Triple("拉屎", R.drawable.ic_poop, PoopColor) else Triple("撒尿", R.drawable.ic_pee, PeeColor)
             list.add(RecordItem(it.timestamp, typeStr, it.shape ?: "记录", resId, color, it))
+        }
+        dewormingLogs.filter { isSameDay(it.timestamp, date) }.forEach {
+            val typeStr = if (it.type == DewormingType.INTERNAL) "内驱" else "外驱"
+            val resId = if (it.type == DewormingType.INTERNAL) R.drawable.ic_deworm_internal else R.drawable.ic_deworm_external
+            list.add(RecordItem(it.timestamp, "驱虫", typeStr, resId, DeepGreen, it))
         }
         snackLogs.filter { isSameDay(it.timestamp, date) }.forEach { log ->
             val snackName = log.snackName.ifBlank { 
@@ -991,6 +1012,7 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
                         is WeightLog -> viewModel.deleteWeight(raw)
                         is MedicationLog -> viewModel.deleteMedicationLog(raw)
                         is ExcretionLog -> viewModel.deleteExcretion(raw)
+                        is DewormingLog -> viewModel.deleteDewormingLog(raw)
                         is SnackLog -> viewModel.deleteSnackLog(raw)
                     }
                     showDeleteConfirmDialog = false
@@ -1010,6 +1032,7 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
                 is WeightLog -> viewModel.updateWeightLog(updatedData)
                 is MedicationLog -> viewModel.updateMedicationLog(updatedData)
                 is ExcretionLog -> viewModel.updateExcretion(updatedData)
+                is DewormingLog -> viewModel.updateDewormingLog(updatedData)
                 is SnackLog -> viewModel.updateSnackLog(updatedData)
             }
             showEditDialog = false; selectedRecord = null
@@ -1355,6 +1378,7 @@ fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: ()
     var noteInput by remember { mutableStateOf(if (raw is WeightLog) raw.note ?: "" else "") }
     var excretionType by remember { mutableStateOf(if (raw is ExcretionLog) raw.type else ExcretionType.POOP) }
     var excretionShape by remember { mutableStateOf(if (raw is ExcretionLog) raw.shape ?: "正常" else "正常") }
+    var dewormingType by remember { mutableStateOf(if (raw is DewormingLog) raw.type else DewormingType.INTERNAL) }
     var selectedDateTime by remember { mutableStateOf(Calendar.getInstance().apply { timeInMillis = record.timestamp }) }
     
     LaunchedEffect(raw) {
@@ -1391,6 +1415,17 @@ fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: ()
                             }
                         }
                     }
+                } else if (raw is DewormingLog) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("驱虫类型:", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = dewormingType == DewormingType.INTERNAL, onClick = { dewormingType = DewormingType.INTERNAL })
+                            Text("内驱")
+                            Spacer(modifier = Modifier.width(16.dp))
+                            RadioButton(selected = dewormingType == DewormingType.EXTERNAL, onClick = { dewormingType = DewormingType.EXTERNAL })
+                            Text("外驱")
+                        }
+                    }
                 } else {
                     SelectAllOutlinedTextField(value = valueInput, onValueChange = { valueInput = it }, label = { Text("数值") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth())
                     if (raw is WeightLog) SelectAllOutlinedTextField(value = noteInput, onValueChange = { noteInput = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
@@ -1410,6 +1445,7 @@ fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: ()
                         is WeightLog -> raw.copy(weight = newVal, note = noteInput.ifBlank { null }, timestamp = newTs, recordTime = newTs.toDbTime())
                         is MedicationLog -> raw.copy(dosage = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
                         is ExcretionLog -> raw.copy(type = excretionType, shape = excretionShape, timestamp = newTs, recordTime = newTs.toDbTime())
+                        is DewormingLog -> raw.copy(type = dewormingType, timestamp = newTs, recordTime = newTs.toDbTime())
                         is SnackLog -> raw.copy(amount = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
                         else -> null
                     }
@@ -1720,6 +1756,96 @@ fun PetProfileDialog(
             onDismiss = { showDatePicker = false }
         )
     }
+}
+
+@Composable
+fun DewormingLogDialog(onConfirm: (DewormingType, Calendar) -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
+    var selectedType by remember { mutableStateOf(DewormingType.INTERNAL) }
+    var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
+    var isManualTime by remember { mutableStateOf(false) }
+
+    LaunchedEffect(initialDate) {
+        if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("驱虫记录", fontWeight = FontWeight.Bold, color = DeepGreen)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("选择驱虫类型", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (selectedType == DewormingType.INTERNAL) DeepGreen.copy(alpha = 0.15f) else Color.Transparent)
+                            .clickable { selectedType = DewormingType.INTERNAL }
+                            .padding(16.dp)
+                    ) {
+                        Image(
+                            painter = painterResource(R.drawable.ic_deworm_internal),
+                            contentDescription = "内驱",
+                            modifier = Modifier.size(52.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "内驱",
+                            color = if (selectedType == DewormingType.INTERNAL) DeepGreen else Color.Gray,
+                            fontWeight = if (selectedType == DewormingType.INTERNAL) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 15.sp
+                        )
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (selectedType == DewormingType.EXTERNAL) DeepGreen.copy(alpha = 0.15f) else Color.Transparent)
+                            .clickable { selectedType = DewormingType.EXTERNAL }
+                            .padding(16.dp)
+                    ) {
+                        Image(
+                            painter = painterResource(R.drawable.ic_deworm_external),
+                            contentDescription = "外驱",
+                            modifier = Modifier.size(52.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "外驱",
+                            color = if (selectedType == DewormingType.EXTERNAL) DeepGreen else Color.Gray,
+                            fontWeight = if (selectedType == DewormingType.EXTERNAL) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 15.sp
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                DateTimePickerButton(selectedDateTime) {
+                    selectedDateTime = it
+                    isManualTime = true
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                TextButton(onClick = {
+                    onConfirm(selectedType, selectedDateTime)
+                    onDismiss()
+                }) {
+                    Text("确定", color = DeepGreen, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = null
+    )
 }
 
 @Composable

@@ -61,6 +61,7 @@ fun StatsScreen(viewModel: PetViewModel) {
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     val excretionLogs by viewModel.excretionLogs.collectAsState()
+    val dewormingLogs by viewModel.dewormingLogs.collectAsState()
     val foodLogs by viewModel.foodLogs.collectAsState()
     val waterLogs by viewModel.waterLogs.collectAsState()
     val weightLogsState by viewModel.weightLogs.collectAsState()
@@ -348,6 +349,10 @@ fun StatsScreen(viewModel: PetViewModel) {
         }
 
         item {
+            LastDewormingInfo(dewormingLogs)
+        }
+
+        item {
             ActivityLogSection(activityLogs)
         }
 
@@ -371,6 +376,7 @@ fun StatsScreen(viewModel: PetViewModel) {
                 item { FoldingStatCard("饮水消耗 (ml)", R.drawable.ic_water, waterLogs.filter { it.type == ConsumptionType.EAT }, "consumption", WaterColor) }
                 item { FoldingStatCard("排便次数", R.drawable.ic_poop, excretionLogs.filter { it.type == ExcretionType.POOP }, "excretion", PoopColor.copy(alpha = 0.6f)) }
                 item { FoldingStatCard("排尿次数", R.drawable.ic_pee, excretionLogs.filter { it.type == ExcretionType.PEE }, "excretion", PeeColor.copy(alpha = 0.6f)) }
+                item { LastDewormingInfo(dewormingLogs) }
                 item { ActivityLogSection(activityLogs) }
                 item { SyncLogSection(syncLogs, pendingCount) }
             }
@@ -777,6 +783,36 @@ fun LastExcretionInfo(logs: List<ExcretionLog>) {
             VerticalDivider(modifier = Modifier.height(40.dp), color = BgGreen)
             InfoColumn("距离上次撒尿", lastPee, now, PeeColor)
         }
+    }
+}
+
+@Composable
+fun LastDewormingInfo(logs: List<DewormingLog>) {
+    val lastInternal = logs.filter { it.type == DewormingType.INTERNAL }.maxByOrNull { it.timestamp }?.timestamp
+    val lastExternal = logs.filter { it.type == DewormingType.EXTERNAL }.maxByOrNull { it.timestamp }?.timestamp
+    val now = System.currentTimeMillis()
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
+        Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+            InfoColumnWithIcon("距离上次内驱", lastInternal, now, DeepGreen, R.drawable.ic_deworm_internal)
+            VerticalDivider(modifier = Modifier.height(40.dp), color = BgGreen)
+            InfoColumnWithIcon("距离上次外驱", lastExternal, now, DeepGreen, R.drawable.ic_deworm_external)
+        }
+    }
+}
+
+@Composable
+fun InfoColumnWithIcon(label: String, timestamp: Long?, now: Long, color: Color, resId: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Image(painter = painterResource(resId), contentDescription = null, modifier = Modifier.size(16.dp), contentScale = ContentScale.Fit)
+            Text(label, style = MaterialTheme.typography.labelMedium, color = Color.Gray)
+        }
+        val diffText = if (timestamp == null || timestamp == 0L) "无记录" else {
+            val diff = now - timestamp
+            val days = TimeUnit.MILLISECONDS.toDays(diff)
+            "${days}天"
+        }
+        Text(diffText, style = MaterialTheme.typography.titleLarge, color = color, fontWeight = FontWeight.Bold)
     }
 }
 
