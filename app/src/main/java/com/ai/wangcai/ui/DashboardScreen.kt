@@ -34,8 +34,15 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import com.ai.wangcai.R
 import com.ai.wangcai.data.*
 import com.ai.wangcai.viewmodel.PetViewModel
@@ -1374,13 +1381,20 @@ fun WheelDatePickerDialog(
 @Composable
 fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: () -> Unit) {
     val raw = record.rawData
+    val isNumericRecord = raw !is ExcretionLog && raw !is DewormingLog
     var valueInput by remember { mutableStateOf("") }
     var noteInput by remember { mutableStateOf(if (raw is WeightLog) raw.note ?: "" else "") }
     var excretionType by remember { mutableStateOf(if (raw is ExcretionLog) raw.type else ExcretionType.POOP) }
     var excretionShape by remember { mutableStateOf(if (raw is ExcretionLog) raw.shape ?: "正常" else "正常") }
     var dewormingType by remember { mutableStateOf(if (raw is DewormingLog) raw.type else DewormingType.INTERNAL) }
     var selectedDateTime by remember { mutableStateOf(Calendar.getInstance().apply { timeInMillis = record.timestamp }) }
-    
+
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    var showNumericKeyboard by remember { mutableStateOf(isNumericRecord) }
+    var isFirstInput by remember { mutableStateOf(true) }
+
     LaunchedEffect(raw) {
         valueInput = when(raw) {
             is ConsumptionLog -> raw.amount.toString()
@@ -1390,71 +1404,183 @@ fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: ()
             else -> ""
         }
     }
-    AlertDialog(
+
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("修改记录") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (raw is ExcretionLog) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = excretionType == ExcretionType.POOP, onClick = { excretionType = ExcretionType.POOP })
-                            Text("拉屎")
-                            Spacer(modifier = Modifier.width(16.dp))
-                            RadioButton(selected = excretionType == ExcretionType.PEE, onClick = { excretionType = ExcretionType.PEE })
-                            Text("撒尿")
-                        }
-                        val shapes = if (excretionType == ExcretionType.POOP) listOf("正常", "软便", "稀便") else listOf("正常", "尿多", "尿少")
-                        Text("状态:", style = MaterialTheme.typography.labelMedium)
-                        Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                            shapes.forEach { s ->
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { excretionShape = s }) {
-                                    RadioButton(selected = excretionShape == s, onClick = { excretionShape = s })
-                                    Text(s, fontSize = 14.sp)
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = if (isLandscape) Alignment.Center else Alignment.TopCenter
+        ) {
+            val dialogContent: @Composable () -> Unit = {
+                Surface(
+                    modifier = if (isLandscape) {
+                        Modifier
+                            .widthIn(min = 320.dp, max = 400.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    } else {
+                        Modifier
+                            .padding(top = 48.dp)
+                            .padding(horizontal = 24.dp)
+                            .widthIn(max = 380.dp)
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 20.dp, vertical = 16.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text("修改记录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = DeepGreen)
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        if (raw is ExcretionLog) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = excretionType == ExcretionType.POOP, onClick = { excretionType = ExcretionType.POOP })
+                                    Text("拉屎")
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    RadioButton(selected = excretionType == ExcretionType.PEE, onClick = { excretionType = ExcretionType.PEE })
+                                    Text("撒尿")
+                                }
+                                val shapes = if (excretionType == ExcretionType.POOP) listOf("正常", "软便", "稀便") else listOf("正常", "尿多", "尿少")
+                                Text("状态:", style = MaterialTheme.typography.labelMedium)
+                                Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                                    shapes.forEach { s ->
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { excretionShape = s }) {
+                                            RadioButton(selected = excretionShape == s, onClick = { excretionShape = s })
+                                            Text(s, fontSize = 14.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (raw is DewormingLog) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("驱虫类型:", style = MaterialTheme.typography.labelMedium)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = dewormingType == DewormingType.INTERNAL, onClick = { dewormingType = DewormingType.INTERNAL })
+                                    Text("内驱")
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    RadioButton(selected = dewormingType == DewormingType.EXTERNAL, onClick = { dewormingType = DewormingType.EXTERNAL })
+                                    Text("外驱")
+                                }
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                NumericInputField(
+                                    value = valueInput,
+                                    label = { Text("数值") },
+                                    isActive = showNumericKeyboard,
+                                    onClick = {
+                                        showNumericKeyboard = true
+                                        isFirstInput = true
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                if (raw is WeightLog) {
+                                    SelectAllOutlinedTextField(
+                                        value = noteInput,
+                                        onValueChange = { noteInput = it },
+                                        label = { Text("备注") },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .onFocusChanged { if (it.isFocused) showNumericKeyboard = false }
+                                    )
                                 }
                             }
                         }
-                    }
-                } else if (raw is DewormingLog) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("驱虫类型:", style = MaterialTheme.typography.labelMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = dewormingType == DewormingType.INTERNAL, onClick = { dewormingType = DewormingType.INTERNAL })
-                            Text("内驱")
-                            Spacer(modifier = Modifier.width(16.dp))
-                            RadioButton(selected = dewormingType == DewormingType.EXTERNAL, onClick = { dewormingType = DewormingType.EXTERNAL })
-                            Text("外驱")
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            DateTimePickerButton(selectedDateTime) { selectedDateTime = it }
+                            Spacer(modifier = Modifier.weight(1f))
+                            TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(onClick = {
+                                val newVal = valueInput.toFloatOrNull() ?: 0f
+                                val newTs = selectedDateTime.timeInMillis
+                                val updated: Any? = when(raw) {
+                                    is ConsumptionLog -> raw.copy(amount = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
+                                    is WeightLog -> raw.copy(weight = newVal, note = noteInput.ifBlank { null }, timestamp = newTs, recordTime = newTs.toDbTime())
+                                    is MedicationLog -> raw.copy(dosage = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
+                                    is ExcretionLog -> raw.copy(type = excretionType, shape = excretionShape, timestamp = newTs, recordTime = newTs.toDbTime())
+                                    is DewormingLog -> raw.copy(type = dewormingType, timestamp = newTs, recordTime = newTs.toDbTime())
+                                    is SnackLog -> raw.copy(amount = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
+                                    else -> null
+                                }
+                                updated?.let { onConfirm(it) }
+                            }) { Text("保存", color = DeepGreen) }
                         }
                     }
-                } else {
-                    SelectAllOutlinedTextField(value = valueInput, onValueChange = { valueInput = it }, label = { Text("数值") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-                    if (raw is WeightLog) SelectAllOutlinedTextField(value = noteInput, onValueChange = { noteInput = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
                 }
             }
-        },
-        confirmButton = {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                DateTimePickerButton(selectedDateTime) { selectedDateTime = it }
-                Spacer(modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text("取消") }
-                TextButton(onClick = {
-                    val newVal = valueInput.toFloatOrNull() ?: 0f
-                    val newTs = selectedDateTime.timeInMillis
-                    val updated: Any? = when(raw) {
-                        is ConsumptionLog -> raw.copy(amount = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
-                        is WeightLog -> raw.copy(weight = newVal, note = noteInput.ifBlank { null }, timestamp = newTs, recordTime = newTs.toDbTime())
-                        is MedicationLog -> raw.copy(dosage = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
-                        is ExcretionLog -> raw.copy(type = excretionType, shape = excretionShape, timestamp = newTs, recordTime = newTs.toDbTime())
-                        is DewormingLog -> raw.copy(type = dewormingType, timestamp = newTs, recordTime = newTs.toDbTime())
-                        is SnackLog -> raw.copy(amount = newVal, timestamp = newTs, recordTime = newTs.toDbTime())
-                        else -> null
+
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    dialogContent()
+                    if (isNumericRecord && showNumericKeyboard) {
+                        Spacer(modifier = Modifier.width(16.dp))
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                valueInput = handleNumericInput(valueInput, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showNumericKeyboard = false },
+                            isLandscape = true,
+                            modifier = Modifier.widthIn(min = 240.dp, max = 280.dp)
+                        )
                     }
-                    updated?.let { onConfirm(it) }
-                }) { Text("保存", color = DeepGreen) }
+                }
+            } else {
+                dialogContent()
+                if (isNumericRecord && showNumericKeyboard) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 12.dp),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                valueInput = handleNumericInput(valueInput, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showNumericKeyboard = false },
+                            isLandscape = false
+                        )
+                    }
+                }
             }
-        },
-        dismissButton = null
-    )
+        }
+    }
 }
 
 @Composable
@@ -1463,9 +1589,14 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean, Ca
     var showTareEdit by remember { mutableStateOf(false) }
     var mode by remember { mutableIntStateOf(0) } 
     var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
-    var isManualTime by remember { mutableStateOf(false) } // 标记用户是否手动改过时间
+    var isManualTime by remember { mutableStateOf(false) }
 
-    // 自动校准：如果用户没动手改过，且初始时间在变（实时的），则同步更新
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    var showKeyboard by remember { mutableStateOf(true) }
+    var isFirstInput by remember { mutableStateOf(true) }
+
     LaunchedEffect(initialDate) {
         if (!isManualTime) {
             selectedDateTime = initialDate.clone() as Calendar
@@ -1475,7 +1606,6 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean, Ca
     val currentTare = bowl?.tareWeight ?: 0f
     var errorText by remember { mutableStateOf<String?>(null) }
     
-    // 计算增减数值 (预览显示)
     val diffAmount = remember(grossInput, mode) {
         val input = grossInput.toFloatOrNull() ?: return@remember null
         if (mode == 1) {
@@ -1485,66 +1615,285 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean, Ca
         }
     }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = {
-            Column {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, color = DeepGreen, fontWeight = FontWeight.Bold)
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { showTareEdit = true }) {
-                        Icon(Icons.Default.Kitchen, null, modifier = Modifier.size(14.dp), tint = Color.Gray)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(text = if (currentTare == 0f) "碗重:未设置" else "碗重:${currentTare}g", fontSize = 12.sp, color = if (currentTare == 0f) Color.Red else Color.Gray)
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = if (isLandscape) Alignment.Center else Alignment.TopCenter
+        ) {
+            val dialogContent: @Composable () -> Unit = {
+                Surface(
+                    modifier = if (isLandscape) {
+                        Modifier
+                            .widthIn(min = 320.dp, max = 380.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    } else {
+                        Modifier
+                            .padding(top = 48.dp)
+                            .padding(horizontal = 24.dp)
+                            .widthIn(max = 380.dp)
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 20.dp, vertical = if (isLandscape) 12.dp else 16.dp)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(if (isLandscape) 8.dp else 10.dp)
+                    ) {
+                        Column {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text(title, color = DeepGreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { showTareEdit = true }) {
+                                    Icon(Icons.Default.Kitchen, null, modifier = Modifier.size(14.dp), tint = Color.Gray)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(text = if (currentTare == 0f) "碗重:未设置" else "碗重:${currentTare}g", fontSize = 12.sp, color = if (currentTare == 0f) Color.Red else Color.Gray)
+                                }
+                            }
+                            Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = if (mode == 1) "基准: 碗重(${currentTare}g)" else "基准: 上次总重(${"%.1f".format(lastGrossWeight)}g)", fontSize = 11.sp, color = Color.Gray)
+                                if (diffAmount != null && diffAmount != 0f) {
+                                    Text(
+                                        text = if (diffAmount > 0) "增加: +${"%.1f".format(diffAmount)}g" else "减少: ${"%.1f".format(diffAmount)}g",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (diffAmount > 0) Color(0xFF4CAF50) else Color(0xFFF44336)
+                                    )
+                                }
+                            }
+                        }
+
+                        NumericInputField(
+                            value = grossInput,
+                            label = { Text("当前总重 (碗+内容)") },
+                            placeholder = { Text("请输入电子秤数值") },
+                            isError = errorText != null,
+                            supportingText = { errorText?.let { Text(it, color = Color.Red) } },
+                            isActive = showKeyboard,
+                            onClick = {
+                                showKeyboard = true
+                                isFirstInput = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = mode == 0, onClick = { mode = 0 }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen))
+                            Text("未空记录", modifier = Modifier.clickable { mode = 0 }, fontSize = if (isLandscape) 13.sp else 14.sp)
+                            Spacer(modifier = Modifier.width(if (isLandscape) 10.dp else 16.dp))
+                            RadioButton(selected = mode == 1, onClick = { mode = 1 }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen))
+                            Text("空碗记录", modifier = Modifier.clickable { mode = 1 }, fontSize = if (isLandscape) 13.sp else 14.sp)
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            DateTimePickerButton(selectedDateTime) {
+                                selectedDateTime = it
+                                isManualTime = true
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                            TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(onClick = {
+                                val g = grossInput.toFloatOrNull() ?: 0f;
+                                if (g < currentTare) errorText = "重量不能小于碗重 (${currentTare}g)"
+                                else { onConfirm(g, mode == 1, selectedDateTime); onDismiss() }
+                            }) { Text("确定", color = DeepGreen) }
+                        }
                     }
                 }
-                Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = if (mode == 1) "基准: 碗重(${currentTare}g)" else "基准: 上次总重(${"%.1f".format(lastGrossWeight)}g)", fontSize = 11.sp, color = Color.Gray)
-                    if (diffAmount != null && diffAmount != 0f) {
-                        Text(
-                            text = if (diffAmount > 0) "增加: +${"%.1f".format(diffAmount)}g" else "减少: ${"%.1f".format(diffAmount)}g",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (diffAmount > 0) Color(0xFF4CAF50) else Color(0xFFF44336)
+            }
+
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    dialogContent()
+                    if (showKeyboard) {
+                        Spacer(modifier = Modifier.width(16.dp))
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                grossInput = handleNumericInput(grossInput, key, isFirstInput)
+                                isFirstInput = false
+                                errorText = null
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = true,
+                            modifier = Modifier.widthIn(min = 240.dp, max = 280.dp)
+                        )
+                    }
+                }
+            } else {
+                dialogContent()
+                if (showKeyboard) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 12.dp),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                grossInput = handleNumericInput(grossInput, key, isFirstInput)
+                                isFirstInput = false
+                                errorText = null
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = false
                         )
                     }
                 }
             }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SelectAllOutlinedTextField(value = grossInput, onValueChange = { grossInput = it; errorText = null }, label = { Text("当前总重 (碗+内容)") }, placeholder = { Text("请输入电子秤数值") }, isError = errorText != null, supportingText = { errorText?.let { Text(it, color = Color.Red) } }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = mode == 0, onClick = { mode = 0 }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen))
-                    Text("未空记录", modifier = Modifier.clickable { mode = 0 })
-                    Spacer(modifier = Modifier.width(16.dp))
-                    RadioButton(selected = mode == 1, onClick = { mode = 1 }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen))
-                    Text("空碗记录", modifier = Modifier.clickable { mode = 1 })
-                }
-            }
-        },
-        confirmButton = { 
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                DateTimePickerButton(selectedDateTime) { 
-                    selectedDateTime = it
-                    isManualTime = true // 一旦手动选择，停止实时跳动
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
-                TextButton(onClick = { 
-                    val g = grossInput.toFloatOrNull() ?: 0f; 
-                    if (g < currentTare) errorText = "重量不能小于碗重 (${currentTare}g)" 
-                    else { onConfirm(g, mode == 1, selectedDateTime); onDismiss() } 
-                }) { Text("确定", color = DeepGreen) } 
-            }
-        },
-        dismissButton = null
-    )
+        }
+    }
+
     if (showTareEdit) {
         var newTare by remember { mutableStateOf(currentTare.toString()) }
-        AlertDialog(onDismissRequest = { showTareEdit = false }, title = { Text("设置碗重") }, text = { SelectAllOutlinedTextField(value = newTare, onValueChange = { newTare = it }, label = { Text("皮重 (g)") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) }, confirmButton = { TextButton(onClick = { newTare.toFloatOrNull()?.let { onUpdateTare(it) }; showTareEdit = false }) { Text("保存", color = DeepGreen) } })
+        var isFirstTareInput by remember { mutableStateOf(true) }
+        var showTareKeyboard by remember { mutableStateOf(true) }
+
+        Dialog(
+            onDismissRequest = { showTareEdit = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { showTareEdit = false }
+                    ),
+                contentAlignment = if (isLandscape) Alignment.Center else Alignment.TopCenter
+            ) {
+                val tareContent: @Composable () -> Unit = {
+                    Surface(
+                        modifier = if (isLandscape) {
+                            Modifier
+                                .widthIn(min = 280.dp, max = 340.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {}
+                                )
+                        } else {
+                            Modifier
+                                .padding(top = 64.dp)
+                                .padding(horizontal = 24.dp)
+                                .widthIn(max = 360.dp)
+                                .fillMaxWidth()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {}
+                                )
+                        },
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 6.dp,
+                        shadowElevation = 8.dp
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text("设置碗重", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = DeepGreen)
+                            NumericInputField(
+                                value = newTare,
+                                label = { Text("皮重 (g)") },
+                                isActive = showTareKeyboard,
+                                onClick = { showTareKeyboard = true; isFirstTareInput = true },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = { showTareEdit = false }) { Text("取消", color = Color.Gray) }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(onClick = {
+                                    newTare.toFloatOrNull()?.let { onUpdateTare(it) }
+                                    showTareEdit = false
+                                }) {
+                                    Text("保存", color = DeepGreen)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (isLandscape) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        tareContent()
+                        if (showTareKeyboard) {
+                            Spacer(modifier = Modifier.width(16.dp))
+                            CustomNumericKeyboard(
+                                onKeyPress = { key ->
+                                    newTare = handleNumericInput(newTare, key, isFirstTareInput)
+                                    isFirstTareInput = false
+                                },
+                                onCollapse = { showTareKeyboard = false },
+                                isLandscape = true,
+                                modifier = Modifier.widthIn(min = 240.dp, max = 280.dp)
+                            )
+                        }
+                    }
+                } else {
+                    tareContent()
+                    if (showTareKeyboard) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(bottom = 12.dp),
+                            contentAlignment = Alignment.BottomCenter
+                        ) {
+                            CustomNumericKeyboard(
+                                onKeyPress = { key ->
+                                    newTare = handleNumericInput(newTare, key, isFirstTareInput)
+                                    isFirstTareInput = false
+                                },
+                                onCollapse = { showTareKeyboard = false },
+                                isLandscape = false
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MedicationLogDialog(meds: List<Medication>, onConfirm: (String, Float, Calendar) -> Unit, onAddMedType: () -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
     var selectedId by remember { mutableStateOf(meds.firstOrNull()?.id ?: "") }
@@ -1552,30 +1901,219 @@ fun MedicationLogDialog(meds: List<Medication>, onConfirm: (String, Float, Calen
     var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
     var isManualTime by remember { mutableStateOf(false) }
 
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    var showKeyboard by remember { mutableStateOf(meds.isNotEmpty()) }
+    var isFirstInput by remember { mutableStateOf(true) }
+
     LaunchedEffect(initialDate) {
         if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss, 
-        title = { Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("记录用药"); IconButton(onClick = onAddMedType) { Icon(Icons.Default.AddCircle, null, tint = DeepGreen) } } }, 
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (meds.isEmpty()) Text("暂无药品，请点击右上角添加", color = Color.Red) else { meds.forEach { med -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedId = med.id }) { RadioButton(selected = selectedId == med.id, onClick = { selectedId = med.id }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen)); Text("${med.name} (${med.unit})") } }; SelectAllOutlinedTextField(value = dose, onValueChange = { dose = it }, label = { Text("剂量") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) } } }, 
-        confirmButton = { 
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                DateTimePickerButton(selectedDateTime) { 
-                    selectedDateTime = it
-                    isManualTime = true
+    LaunchedEffect(meds) {
+        if (selectedId.isEmpty() || meds.none { it.id == selectedId }) {
+            selectedId = meds.firstOrNull()?.id ?: ""
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = if (isLandscape) Alignment.Center else Alignment.TopCenter
+        ) {
+            val dialogContent: @Composable () -> Unit = {
+                Surface(
+                    modifier = if (isLandscape) {
+                        Modifier
+                            .widthIn(min = 320.dp, max = 380.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    } else {
+                        Modifier
+                            .padding(top = 48.dp)
+                            .padding(horizontal = 24.dp)
+                            .widthIn(max = 380.dp)
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 20.dp, vertical = if (isLandscape) 12.dp else 16.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "记录用药",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = DeepGreen
+                            )
+                            IconButton(
+                                onClick = onAddMedType,
+                                modifier = Modifier.size(if (isLandscape) 32.dp else 36.dp)
+                            ) {
+                                Icon(Icons.Default.AddCircle, contentDescription = "添加", tint = DeepGreen)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(if (isLandscape) 6.dp else 10.dp))
+
+                        if (meds.isEmpty()) {
+                            Text(
+                                text = "暂无药品，请点击右上角添加",
+                                color = Color.Red,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = if (isLandscape) 110.dp else 190.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                meds.forEach { med ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(if (isLandscape) 34.dp else 38.dp)
+                                            .clickable { selectedId = med.id }
+                                    ) {
+                                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+                                            RadioButton(
+                                                selected = selectedId == med.id,
+                                                onClick = { selectedId = med.id },
+                                                colors = RadioButtonDefaults.colors(selectedColor = DeepGreen),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "${med.name} (${med.unit})",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 12.dp))
+
+                            NumericInputField(
+                                value = dose,
+                                label = { Text("剂量") },
+                                isActive = showKeyboard,
+                                onClick = {
+                                    showKeyboard = true
+                                    isFirstInput = true
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 14.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            DateTimePickerButton(selectedDateTime) {
+                                selectedDateTime = it
+                                isManualTime = true
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                            TextButton(onClick = onDismiss) {
+                                Text("取消", color = Color.Gray)
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(
+                                enabled = meds.isNotEmpty(),
+                                onClick = {
+                                    dose.toFloatOrNull()?.let { onConfirm(selectedId, it, selectedDateTime) }
+                                    onDismiss()
+                                }
+                            ) {
+                                Text("确定", color = DeepGreen)
+                            }
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
-                TextButton(enabled = meds.isNotEmpty(), onClick = { 
-                    dose.toFloatOrNull()?.let { onConfirm(selectedId, it, selectedDateTime) }
-                    onDismiss() 
-                }) { Text("确定", color = DeepGreen) } 
             }
-        }, 
-        dismissButton = null
-    )
+
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    dialogContent()
+                    if (meds.isNotEmpty() && showKeyboard) {
+                        Spacer(modifier = Modifier.width(16.dp))
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                dose = handleNumericInput(dose, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = true,
+                            modifier = Modifier.widthIn(min = 240.dp, max = 280.dp)
+                        )
+                    }
+                }
+            } else {
+                dialogContent()
+                if (meds.isNotEmpty() && showKeyboard) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 12.dp),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                dose = handleNumericInput(dose, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = false
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1585,6 +2123,7 @@ fun AddMedTypeDialog(onConfirm: (String, String) -> Unit, onDismiss: () -> Unit)
     AlertDialog(onDismissRequest = onDismiss, title = { Text("新增药品种类") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { SelectAllOutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }); SelectAllOutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("单位") }) } }, confirmButton = { TextButton(onClick = { onConfirm(name, unit); onDismiss() }) { Text("添加", color = DeepGreen) } })
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SnackLogDialog(snacks: List<Snack>, onConfirm: (String, Float, Calendar) -> Unit, onAddSnackType: () -> Unit, onDismiss: () -> Unit, initialDate: Calendar) {
     var selectedId by remember { mutableStateOf(snacks.firstOrNull()?.id ?: "") }
@@ -1592,30 +2131,219 @@ fun SnackLogDialog(snacks: List<Snack>, onConfirm: (String, Float, Calendar) -> 
     var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
     var isManualTime by remember { mutableStateOf(false) }
 
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    var showKeyboard by remember { mutableStateOf(snacks.isNotEmpty()) }
+    var isFirstInput by remember { mutableStateOf(true) }
+
     LaunchedEffect(initialDate) {
         if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss, 
-        title = { Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("啥好吃的?"); IconButton(onClick = onAddSnackType) { Icon(Icons.Default.AddCircle, null, tint = DeepGreen) } } }, 
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (snacks.isEmpty()) Text("暂无零食，请点击右上角添加", color = Color.Red) else { snacks.forEach { snack -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedId = snack.id }) { RadioButton(selected = selectedId == snack.id, onClick = { selectedId = snack.id }, colors = RadioButtonDefaults.colors(selectedColor = DeepGreen)); Text("${snack.name} (${snack.unit})") } }; SelectAllOutlinedTextField(value = amount, onValueChange = { amount = it }, label = { Text("份量") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) } } }, 
-        confirmButton = { 
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                DateTimePickerButton(selectedDateTime) { 
-                    selectedDateTime = it
-                    isManualTime = true
+    LaunchedEffect(snacks) {
+        if (selectedId.isEmpty() || snacks.none { it.id == selectedId }) {
+            selectedId = snacks.firstOrNull()?.id ?: ""
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = if (isLandscape) Alignment.Center else Alignment.TopCenter
+        ) {
+            val dialogContent: @Composable () -> Unit = {
+                Surface(
+                    modifier = if (isLandscape) {
+                        Modifier
+                            .widthIn(min = 320.dp, max = 380.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    } else {
+                        Modifier
+                            .padding(top = 48.dp)
+                            .padding(horizontal = 24.dp)
+                            .widthIn(max = 380.dp)
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 20.dp, vertical = if (isLandscape) 12.dp else 16.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "啥好吃的?",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = DeepGreen
+                            )
+                            IconButton(
+                                onClick = onAddSnackType,
+                                modifier = Modifier.size(if (isLandscape) 32.dp else 36.dp)
+                            ) {
+                                Icon(Icons.Default.AddCircle, contentDescription = "添加", tint = DeepGreen)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(if (isLandscape) 6.dp else 10.dp))
+
+                        if (snacks.isEmpty()) {
+                            Text(
+                                text = "暂无零食，请点击右上角添加",
+                                color = Color.Red,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = if (isLandscape) 110.dp else 190.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                snacks.forEach { snack ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(if (isLandscape) 34.dp else 38.dp)
+                                            .clickable { selectedId = snack.id }
+                                    ) {
+                                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+                                            RadioButton(
+                                                selected = selectedId == snack.id,
+                                                onClick = { selectedId = snack.id },
+                                                colors = RadioButtonDefaults.colors(selectedColor = DeepGreen),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "${snack.name} (${snack.unit})",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 12.dp))
+
+                            NumericInputField(
+                                value = amount,
+                                label = { Text("份量") },
+                                isActive = showKeyboard,
+                                onClick = {
+                                    showKeyboard = true
+                                    isFirstInput = true
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 14.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            DateTimePickerButton(selectedDateTime) {
+                                selectedDateTime = it
+                                isManualTime = true
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                            TextButton(onClick = onDismiss) {
+                                Text("取消", color = Color.Gray)
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(
+                                enabled = snacks.isNotEmpty(),
+                                onClick = {
+                                    amount.toFloatOrNull()?.let { onConfirm(selectedId, it, selectedDateTime) }
+                                    onDismiss()
+                                }
+                            ) {
+                                Text("确定", color = DeepGreen)
+                            }
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
-                TextButton(enabled = snacks.isNotEmpty(), onClick = { 
-                    amount.toFloatOrNull()?.let { onConfirm(selectedId, it, selectedDateTime) }
-                    onDismiss() 
-                }) { Text("确定", color = DeepGreen) } 
             }
-        }, 
-        dismissButton = null
-    )
+
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    dialogContent()
+                    if (snacks.isNotEmpty() && showKeyboard) {
+                        Spacer(modifier = Modifier.width(16.dp))
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                amount = handleNumericInput(amount, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = true,
+                            modifier = Modifier.widthIn(min = 240.dp, max = 280.dp)
+                        )
+                    }
+                }
+            } else {
+                dialogContent()
+                if (snacks.isNotEmpty() && showKeyboard) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 12.dp),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                amount = handleNumericInput(amount, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = false
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1632,30 +2360,150 @@ fun UpdateWeightDialog(title: String, label: String, onConfirm: (Float, String?,
     var selectedDateTime by remember { mutableStateOf(initialDate.clone() as Calendar) }
     var isManualTime by remember { mutableStateOf(false) }
 
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    var showKeyboard by remember { mutableStateOf(true) }
+    var isFirstInput by remember { mutableStateOf(true) }
+
     LaunchedEffect(initialDate) {
         if (!isManualTime) selectedDateTime = initialDate.clone() as Calendar
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss, 
-        title = { Text(title, color = MediumGreen, fontWeight = FontWeight.Bold) }, 
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { SelectAllOutlinedTextField(value = input, onValueChange = { input = it }, label = { Text(label) }, singleLine = true, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)); SelectAllOutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注 (可选)") }, singleLine = true) } }, 
-        confirmButton = { 
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                DateTimePickerButton(selectedDateTime) { 
-                    selectedDateTime = it
-                    isManualTime = true
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = if (isLandscape) Alignment.Center else Alignment.TopCenter
+        ) {
+            val dialogContent: @Composable () -> Unit = {
+                Surface(
+                    modifier = if (isLandscape) {
+                        Modifier
+                            .widthIn(min = 320.dp, max = 380.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    } else {
+                        Modifier
+                            .padding(top = 48.dp)
+                            .padding(horizontal = 24.dp)
+                            .widthIn(max = 380.dp)
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 20.dp, vertical = if (isLandscape) 12.dp else 16.dp)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(if (isLandscape) 8.dp else 10.dp)
+                    ) {
+                        Text(title, color = MediumGreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+
+                        NumericInputField(
+                            value = input,
+                            label = { Text(label) },
+                            isActive = showKeyboard,
+                            onClick = {
+                                showKeyboard = true
+                                isFirstInput = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        SelectAllOutlinedTextField(
+                            value = note,
+                            onValueChange = { note = it },
+                            label = { Text("备注 (可选)") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { if (it.isFocused) showKeyboard = false }
+                        )
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            DateTimePickerButton(selectedDateTime) {
+                                selectedDateTime = it
+                                isManualTime = true
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                            TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(onClick = {
+                                input.toFloatOrNull()?.let { onConfirm(it, note.ifBlank { null }, selectedDateTime) }
+                                onDismiss()
+                            }) { Text("确定", color = MediumGreen) }
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text("取消", color = Color.Gray) }
-                TextButton(onClick = { 
-                    input.toFloatOrNull()?.let { onConfirm(it, note.ifBlank { null }, selectedDateTime) }
-                    onDismiss() 
-                }) { Text("确定", color = MediumGreen) } 
             }
-        }, 
-        dismissButton = null
-    )
+
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    dialogContent()
+                    if (showKeyboard) {
+                        Spacer(modifier = Modifier.width(16.dp))
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                input = handleNumericInput(input, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = true,
+                            modifier = Modifier.widthIn(min = 240.dp, max = 280.dp)
+                        )
+                    }
+                }
+            } else {
+                dialogContent()
+                if (showKeyboard) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 12.dp),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        CustomNumericKeyboard(
+                            onKeyPress = { key ->
+                                input = handleNumericInput(input, key, isFirstInput)
+                                isFirstInput = false
+                            },
+                            onCollapse = { showKeyboard = false },
+                            isLandscape = false
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
