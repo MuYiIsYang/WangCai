@@ -204,6 +204,12 @@ interface PetDao {
     @Query("DELETE FROM sync_logs WHERE statusCode >= 200 AND statusCode < 300")
     suspend fun clearSuccessfulSyncLogs()
 
+    @Query("DELETE FROM sync_logs WHERE tableName = :tableName AND recordId = :recordId")
+    suspend fun deleteSyncLogsForRecord(tableName: String, recordId: String)
+
+    @Query("DELETE FROM sync_logs")
+    suspend fun clearAllSyncLogs()
+
     @Update
     suspend fun updateSyncLog(log: SyncLog)
 
@@ -225,6 +231,12 @@ interface PetDao {
 
     @Query("DELETE FROM pending_tasks WHERE tableName = :tableName AND recordId = :recordId AND operation = :op")
     suspend fun removePendingTask(tableName: String, recordId: String, op: String)
+
+    @Query("DELETE FROM pending_tasks WHERE tableName = :tableName AND recordId = :recordId")
+    suspend fun removePendingTaskByRecordId(tableName: String, recordId: String)
+
+    @Query("DELETE FROM pending_tasks")
+    suspend fun clearAllPendingTasks()
 
     @Query("SELECT COUNT(*) FROM pending_tasks")
     fun getPendingTasksCount(): Flow<Int>

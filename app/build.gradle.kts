@@ -14,10 +14,19 @@ android {
         minSdk = 33
         //noinspection OldTargetApi
         targetSdk = 36
-        versionCode = 28
-        versionName = "2.8"
+        versionCode = 29
+        versionName = "2.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("E:/0_MUYI/as_key/muyi(muyimuyi)")
+            storePassword = "muyimuyi"
+            keyAlias = "key0"
+            keyPassword = "muyimuyi"
+        }
     }
 
     buildTypes {
@@ -29,6 +38,7 @@ android {
             )
         }
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

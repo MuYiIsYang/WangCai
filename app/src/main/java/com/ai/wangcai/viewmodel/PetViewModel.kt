@@ -107,16 +107,45 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
         if (tasks.isEmpty()) return
         Log.d("SupabaseSync", "Processing ${tasks.size} pending tasks...")
         tasks.forEach { task ->
+            val item = getLocalRecordDirect(task.tableName, task.recordId)
+            val isAlreadySynced = when(item) {
+                is ConsumptionLog -> item.isSynced
+                is WeightLog -> item.isSynced
+                is MedicationLog -> item.isSynced
+                is ExcretionLog -> item.isSynced
+                is DewormingLog -> item.isSynced
+                is SnackLog -> item.isSynced
+                is Medication -> item.isSynced
+                is Snack -> item.isSynced
+                is Bowl -> item.isSynced
+                is PetProfile -> item.isSynced
+                else -> false
+            }
+
+            // 如果本地记录已被删除，且非DELETE操作，自动清理待办
+            if (item == null && task.operation != "DELETE") {
+                dao.removePendingTaskByRecordId(task.tableName, task.recordId)
+                dao.deleteSyncLogsForRecord(task.tableName, task.recordId)
+                return@forEach
+            }
+
+            // 如果本地记录已标记同步成功，自动清理待办和历史失败日志
+            if (task.operation != "DELETE" && isAlreadySynced) {
+                dao.removePendingTaskByRecordId(task.tableName, task.recordId)
+                dao.deleteSyncLogsForRecord(task.tableName, task.recordId)
+                return@forEach
+            }
+
             val res = when(task.operation) {
                 "DELETE" -> supabase.deleteData(task.tableName, task.recordId)
                 else -> {
-                    val item = getLocalRecordDirect(task.tableName, task.recordId)
                     if (item != null) supabase.upsertData(task.tableName, item) 
                     else SupabaseRepository.NetworkResult(true, 200, "Record no longer exists", "SKIP")
                 }
             }
             if (res.isSuccess) {
-                dao.removePendingTask(task.tableName, task.recordId, task.operation)
+                dao.removePendingTaskByRecordId(task.tableName, task.recordId)
+                dao.deleteSyncLogsForRecord(task.tableName, task.recordId)
                 if (task.operation != "DELETE") markRecordAsSynced(task.tableName, task.recordId)
                 updateSyncLogToSuccess(task.tableName, task.recordId, res)
             }
@@ -155,12 +184,19 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
         if (!isCloudSyncEnabled() || !supabaseConfig.value.isValid) { markRecordAsSynced(tableName, id); return id }
         val res = supabase.upsertData(tableName, record)
         addSyncLog(tableName, op, id, res)
-        if (res.isSuccess) markRecordAsSynced(tableName, id)
-        else {
+        if (res.isSuccess) {
+            markRecordAsSynced(tableName, id)
+            dao.removePendingTaskByRecordId(tableName, id)
+            dao.deleteSyncLogsForRecord(tableName, id)
+        } else {
             val deferred = CompletableDeferred<Boolean>()
             _pendingConfirmRequest.value = PendingConfirmRequest("云端同步失败，是否加入待办？") { add -> _pendingConfirmRequest.value = null; deferred.complete(add) }
-            if (deferred.await()) { dao.clearSuccessfulSyncLogs(); dao.insertPendingTask(PendingSyncTask(tableName = tableName, operation = op, recordId = id)) }
-            else markRecordAsSynced(tableName, id)
+            if (deferred.await()) { 
+                dao.clearSuccessfulSyncLogs()
+                dao.insertPendingTask(PendingSyncTask(tableName = tableName, operation = op, recordId = id)) 
+            } else {
+                markRecordAsSynced(tableName, id)
+            }
         }
         return id
     }
@@ -175,12 +211,19 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
         if (!isCloudSyncEnabled() || !supabaseConfig.value.isValid) { onSuccess(); return }
         val res = syncCall()
         addSyncLog(tableName, op, recordId, res)
-        if (res.isSuccess) onSuccess() 
-        else {
+        if (res.isSuccess) {
+            dao.removePendingTaskByRecordId(tableName, recordId)
+            dao.deleteSyncLogsForRecord(tableName, recordId)
+            onSuccess() 
+        } else {
             val deferred = CompletableDeferred<Boolean>()
             _pendingConfirmRequest.value = PendingConfirmRequest("同步失败，是否加入待办？") { add -> _pendingConfirmRequest.value = null; deferred.complete(add) }
-            if (deferred.await()) { dao.clearSuccessfulSyncLogs(); dao.insertPendingTask(PendingSyncTask(tableName = tableName, operation = op, recordId = recordId)) }
-            else onSuccess()
+            if (deferred.await()) { 
+                dao.clearSuccessfulSyncLogs()
+                dao.insertPendingTask(PendingSyncTask(tableName = tableName, operation = op, recordId = recordId)) 
+            } else {
+                onSuccess()
+            }
         }
     }
 
@@ -249,10 +292,42 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
                 processPendingTasks()
                 val startTs = if (syncAll) 0L else (targetDate.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, 1); set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
                 val endTs = if (syncAll) Long.MAX_VALUE else (Calendar.getInstance().apply { timeInMillis = startTs }).apply { add(Calendar.MONTH, 1) }.timeInMillis
-                petProfile.value?.let { profile -> val res = supabase.upsertData("宠物档案", profile); addSyncLog("宠物档案", "UPSERT", profile.id, res); if (res.isSuccess) dao.insertPetProfile(profile.copy(isSynced = true)) }
-                allBowls.value.forEach { val res = supabase.upsertData("食具配置", it); addSyncLog("食具配置", "UPSERT", it.id, res); if (res.isSuccess) dao.insertBowl(it.copy(isSynced = true)) }
-                medications.value.forEach { val res = supabase.upsertData("药品库", it); addSyncLog("药品库", "UPSERT", it.id, res); if (res.isSuccess) dao.insertMedication(it.copy(isSynced = true)) }
-                snacks.value.forEach { val res = supabase.upsertData("零食库", it); addSyncLog("零食库", "UPSERT", it.id, res); if (res.isSuccess) dao.insertSnack(it.copy(isSynced = true)) }
+                petProfile.value?.let { profile -> 
+                    val res = supabase.upsertData("宠物档案", profile)
+                    addSyncLog("宠物档案", "UPSERT", profile.id, res)
+                    if (res.isSuccess) {
+                        dao.insertPetProfile(profile.copy(isSynced = true))
+                        dao.removePendingTaskByRecordId("宠物档案", profile.id)
+                        dao.deleteSyncLogsForRecord("宠物档案", profile.id)
+                    }
+                }
+                allBowls.value.forEach { 
+                    val res = supabase.upsertData("食具配置", it)
+                    addSyncLog("食具配置", "UPSERT", it.id, res)
+                    if (res.isSuccess) {
+                        dao.insertBowl(it.copy(isSynced = true))
+                        dao.removePendingTaskByRecordId("食具配置", it.id)
+                        dao.deleteSyncLogsForRecord("食具配置", it.id)
+                    }
+                }
+                medications.value.forEach { 
+                    val res = supabase.upsertData("药品库", it)
+                    addSyncLog("药品库", "UPSERT", it.id, res)
+                    if (res.isSuccess) {
+                        dao.insertMedication(it.copy(isSynced = true))
+                        dao.removePendingTaskByRecordId("药品库", it.id)
+                        dao.deleteSyncLogsForRecord("药品库", it.id)
+                    }
+                }
+                snacks.value.forEach { 
+                    val res = supabase.upsertData("零食库", it)
+                    addSyncLog("零食库", "UPSERT", it.id, res)
+                    if (res.isSuccess) {
+                        dao.insertSnack(it.copy(isSynced = true))
+                        dao.removePendingTaskByRecordId("零食库", it.id)
+                        dao.deleteSyncLogsForRecord("零食库", it.id)
+                    }
+                }
                 uploadTable(medicationLogs.value, "用药打卡记录", startTs, endTs) { dao.updateMedicationLogs(listOf(it.copy(isSynced = true))) }
                 uploadTable(snackLogs.value, "零食打卡记录", startTs, endTs) { dao.updateSnackLogs(listOf(it.copy(isSynced = true))) }
                 uploadTable(foodLogs.value + waterLogs.value, "饮食饮水记录", startTs, endTs) { dao.updateConsumptionLogs(listOf(it.copy(isSynced = true))) }
@@ -272,7 +347,11 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
             if ((ts in start until end) || !synced) {
                 val res = supabase.upsertData(tableName, item as Any)
                 addSyncLog(tableName, "UPSERT", id, res)
-                if (res.isSuccess) onSuccess(item)
+                if (res.isSuccess) {
+                    onSuccess(item)
+                    dao.removePendingTaskByRecordId(tableName, id)
+                    dao.deleteSyncLogsForRecord(tableName, id)
+                }
             }
         }
     }
@@ -419,4 +498,22 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun getLocalTablesWithLatestRow(): List<Pair<String, Map<String, String>>> = withContext(Dispatchers.IO) { val tables = mutableListOf<Pair<String, Map<String, String>>>(); val dbSql = db.openHelper.readableDatabase; val cn = dbSql.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'android_metadata' AND name NOT LIKE 'sqlite_sequence' AND name NOT LIKE 'room_master_table'"); while (cn.moveToNext()) { val tn = cn.getString(0); val ttn = TranslationHelper.translateTable(tn); val ocs = TranslationHelper.getColumnOrder(tn); val dm = mutableMapOf<String, String>(); val dc = dbSql.query("SELECT * FROM $tn ORDER BY rowid DESC LIMIT 1"); if (dc.moveToFirst()) { ocs.forEach { cn -> val idx = dc.getColumnIndex(cn); if (idx != -1) dm[TranslationHelper.translateColumn(cn)] = TranslationHelper.translateValue(dc.getString(idx) ?: "-") }; for (i in 0 until dc.columnCount) { val cn = dc.getColumnName(i); if (!ocs.contains(cn) && cn != "avatarPath") dm[TranslationHelper.translateColumn(cn)] = TranslationHelper.translateValue(try { dc.getString(i) ?: "-" } catch(e: Exception) { "-" }) } } else { for (i in 0 until dc.columnCount) { val cn = dc.getColumnName(i); if (cn != "avatarPath") dm[TranslationHelper.translateColumn(cn)] = "[无数据]" } }; dc.close(); tables.add(ttn to dm) }; cn.close(); val dor = listOf("宠物档案", "体重记录", "饮食饮水记录", "拉撒记录", "驱虫记录", "零食库", "零食打卡记录", "药品库", "药品打卡记录", "食具配置", "操作记录"); tables.sortedBy { (n, _) -> val idx = dor.indexOf(n); if (idx != -1) idx else dor.size } }
     suspend fun getCloudTablesWithLatestRow(): List<Pair<String, Map<String, String>>> = withContext(Dispatchers.IO) { val tns = supabase.getAllSupabaseTables(); val tables = tns.map { n -> val lr = supabase.fetchLatestRow(n); val dm = mutableMapOf<String, String>(); lr?.forEach { (k, v) -> dm[TranslationHelper.translateColumn(k)] = TranslationHelper.translateValue(v.toString().removeSurrounding("\"")) }; if (dm.isEmpty()) dm["提示"] = "表为空所无法获取最新行"; TranslationHelper.translateTable(n) to dm }; val dor = listOf("宠物档案", "体重记录", "饮食饮水记录", "拉撒记录", "驱虫记录", "零食库", "零食打卡记录", "药品库", "药品打卡记录", "食具配置", "操作记录"); tables.sortedBy { (n, _) -> val idx = dor.indexOf(n); if (idx != -1) idx else dor.size } }
     suspend fun getAllDataSnapshot(): DataSnapshot = withContext(Dispatchers.IO) { DataSnapshot(dao.getAllBowls().first(), dao.getConsumptionLogs(BowlType.FOOD).first() + dao.getConsumptionLogs(BowlType.WATER).first(), dao.getWeightLogs().first(), dao.getAllMedications().first(), dao.getMedicationLogs().first(), dao.getAllExcretionLogs().first(), dao.getAllSnacks().first(), dao.getSnackLogs().first(), dao.getPetProfile().first(), dao.getAllDewormingLogs().first()) }
+
+    fun clearSyncLogs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            dao.clearAllSyncLogs()
+        }
+    }
+
+    fun clearPendingTasks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            dao.clearAllPendingTasks()
+        }
+    }
+
+    fun retryAllPendingTasks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            processPendingTasks()
+        }
+    }
 }

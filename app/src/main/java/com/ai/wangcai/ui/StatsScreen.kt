@@ -357,7 +357,13 @@ fun StatsScreen(viewModel: PetViewModel) {
         }
 
         item {
-            SyncLogSection(syncLogs, pendingCount)
+            SyncLogSection(
+                logs = syncLogs,
+                pendingCount = pendingCount,
+                onClearLogs = { viewModel.clearSyncLogs() },
+                onClearPendingTasks = { viewModel.clearPendingTasks() },
+                onRetryPendingTasks = { viewModel.retryAllPendingTasks() }
+            )
         }
         
         item { Spacer(modifier = Modifier.height(40.dp)) }
@@ -378,7 +384,15 @@ fun StatsScreen(viewModel: PetViewModel) {
                 item { FoldingStatCard("排尿次数", R.drawable.ic_pee, excretionLogs.filter { it.type == ExcretionType.PEE }, "excretion", PeeColor.copy(alpha = 0.6f)) }
                 item { LastDewormingInfo(dewormingLogs) }
                 item { ActivityLogSection(activityLogs) }
-                item { SyncLogSection(syncLogs, pendingCount) }
+                item {
+                    SyncLogSection(
+                        logs = syncLogs,
+                        pendingCount = pendingCount,
+                        onClearLogs = { viewModel.clearSyncLogs() },
+                        onClearPendingTasks = { viewModel.clearPendingTasks() },
+                        onRetryPendingTasks = { viewModel.retryAllPendingTasks() }
+                    )
+                }
             }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -528,7 +542,13 @@ fun ActivityLogSection(logs: List<ActivityLog>) {
 }
 
 @Composable
-fun SyncLogSection(logs: List<SyncLog>, pendingCount: Int) {
+fun SyncLogSection(
+    logs: List<SyncLog>,
+    pendingCount: Int,
+    onClearLogs: () -> Unit = {},
+    onClearPendingTasks: () -> Unit = {},
+    onRetryPendingTasks: () -> Unit = {}
+) {
     var isExpanded by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -565,6 +585,39 @@ fun SyncLogSection(logs: List<SyncLog>, pendingCount: Int) {
             }
             if (isExpanded) {
                 Column(modifier = Modifier.padding(top = 12.dp)) {
+                    if (pendingCount > 0 || logs.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (pendingCount > 0) {
+                                OutlinedButton(
+                                    onClick = onRetryPendingTasks,
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Text("重试待办", fontSize = 11.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = onClearPendingTasks,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Text("清空待办", fontSize = 11.sp)
+                                }
+                            }
+                            if (logs.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick = onClearLogs,
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Text("清空日志", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
                     if (logs.isEmpty()) {
                         Text("暂无同步记录", fontSize = 12.sp, color = Color.LightGray, modifier = Modifier.padding(vertical = 8.dp))
                     } else {
