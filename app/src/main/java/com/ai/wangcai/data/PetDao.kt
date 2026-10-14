@@ -17,7 +17,7 @@ interface PetDao {
     suspend fun insertBowl(bowl: Bowl)
 
     // ConsumptionLog
-    @Query("SELECT * FROM consumption_logs WHERE bowlType = :bowlType ORDER BY recordTime DESC")
+    @Query("SELECT * FROM consumption_logs WHERE bowlType = :bowlType ORDER BY (CASE WHEN timestamp > 0 THEN timestamp ELSE 0 END) DESC, recordTime DESC")
     fun getConsumptionLogs(bowlType: BowlType): Flow<List<ConsumptionLog>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -36,7 +36,7 @@ interface PetDao {
     suspend fun countConsumptionLogAt(recordTime: String): Int
 
     // WeightLog
-    @Query("SELECT * FROM weight_logs ORDER BY recordTime DESC")
+    @Query("SELECT * FROM weight_logs ORDER BY (CASE WHEN timestamp > 0 THEN timestamp ELSE 0 END) DESC, recordTime DESC")
     fun getWeightLogs(): Flow<List<WeightLog>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -65,7 +65,7 @@ interface PetDao {
     suspend fun getMedicationByName(name: String): Medication?
 
     // MedicationLog
-    @Query("SELECT * FROM medication_logs ORDER BY recordTime DESC")
+    @Query("SELECT * FROM medication_logs ORDER BY (CASE WHEN timestamp > 0 THEN timestamp ELSE 0 END) DESC, recordTime DESC")
     fun getMedicationLogs(): Flow<List<MedicationLog>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -84,7 +84,7 @@ interface PetDao {
     suspend fun countMedicationLogAt(recordTime: String): Int
 
     // ExcretionLog
-    @Query("SELECT * FROM excretion_logs ORDER BY recordTime DESC")
+    @Query("SELECT * FROM excretion_logs ORDER BY (CASE WHEN timestamp > 0 THEN timestamp ELSE 0 END) DESC, recordTime DESC")
     fun getAllExcretionLogs(): Flow<List<ExcretionLog>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -103,7 +103,7 @@ interface PetDao {
     suspend fun countExcretionLogAt(recordTime: String): Int
 
     // DewormingLog
-    @Query("SELECT * FROM deworming_logs ORDER BY recordTime DESC")
+    @Query("SELECT * FROM deworming_logs ORDER BY (CASE WHEN timestamp > 0 THEN timestamp ELSE 0 END) DESC, recordTime DESC")
     fun getAllDewormingLogs(): Flow<List<DewormingLog>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -132,7 +132,7 @@ interface PetDao {
     suspend fun getSnackByName(name: String): Snack?
 
     // SnackLog
-    @Query("SELECT * FROM snack_logs ORDER BY recordTime DESC")
+    @Query("SELECT * FROM snack_logs ORDER BY (CASE WHEN timestamp > 0 THEN timestamp ELSE 0 END) DESC, recordTime DESC")
     fun getSnackLogs(): Flow<List<SnackLog>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

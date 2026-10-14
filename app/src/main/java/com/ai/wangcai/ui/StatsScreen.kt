@@ -678,8 +678,15 @@ fun SyncLogItem(log: SyncLog) {
 }
 
 @Composable
-fun FoldingStatCard(title: String, resId: Int, logs: List<Any>, type: String, barColor: Color) {
-    var expandedTab by remember { mutableIntStateOf(-1) }
+fun FoldingStatCard(
+    title: String, 
+    resId: Int, 
+    logs: List<Any>, 
+    type: String, 
+    barColor: Color,
+    defaultExpandedTab: Int = 0
+) {
+    var expandedTab by rememberSaveable(title) { mutableIntStateOf(defaultExpandedTab) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White),

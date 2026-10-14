@@ -47,9 +47,33 @@ object DatabaseMigrations {
         }
     }
 
+    val MIGRATION_24_25 = object : Migration(24, 25) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            val cursor = db.query("PRAGMA table_info(consumption_logs)")
+            var exists = false
+            while (cursor.moveToNext()) {
+                val nameIndex = cursor.getColumnIndex("name")
+                if (nameIndex != -1 && cursor.getString(nameIndex) == "changeDetail") {
+                    exists = true
+                    break
+                }
+            }
+            cursor.close()
+            
+            if (!exists) {
+                db.execSQL("ALTER TABLE consumption_logs ADD COLUMN changeDetail TEXT")
+            }
+
+            try {
+                db.execSQL("UPDATE consumption_logs SET timestamp = (strftime('%s', replace(substr(recordTime, 1, 19), 'T', ' ')) * 1000) WHERE timestamp = 0 AND recordTime IS NOT NULL AND recordTime != ''")
+            } catch (_: Exception) {}
+        }
+    }
+
     // 所有的手动迁移逻辑汇总
     fun all(): Array<Migration> = arrayOf(
         MIGRATION_22_23,
-        MIGRATION_23_24
+        MIGRATION_23_24,
+        MIGRATION_24_25
     )
 }

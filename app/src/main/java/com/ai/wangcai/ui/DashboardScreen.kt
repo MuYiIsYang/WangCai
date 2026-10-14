@@ -466,12 +466,15 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
     if (showFoodDialog) {
         val bowl by viewModel.foodBowl.collectAsState()
         val logs by viewModel.foodLogs.collectAsState()
-        val lastGross = logs.firstOrNull()?.grossWeight ?: 0f
+        val lastLog = logs.firstOrNull()
+        val lastGross = lastLog?.grossWeight ?: 0f
         val tare = bowl?.tareWeight ?: 0f
         ConsumptionDialog(
             title = "吃吃",
             bowl = bowl,
+            logs = logs,
             lastGrossWeight = if (lastGross > 0f) lastGross else tare,
+            lastRecordTime = lastLog?.timestamp,
             initialDate = additionInitialDate,
             onConfirm = { gross, isFromEmpty, date -> viewModel.recordConsumption(gross, BowlType.FOOD, isFromEmpty, null, date) },
             onUpdateTare = { newTare -> viewModel.updateBowl(bowl?.name ?: "食盆", newTare, BowlType.FOOD, bowl?.id) },
@@ -482,12 +485,15 @@ fun DashboardScreen(viewModel: PetViewModel, onSupabaseConfigClick: () -> Unit) 
     if (showWaterDialog) {
         val bowl by viewModel.waterBowl.collectAsState()
         val logs by viewModel.waterLogs.collectAsState()
-        val lastGross = logs.firstOrNull()?.grossWeight ?: 0f
+        val lastLog = logs.firstOrNull()
+        val lastGross = lastLog?.grossWeight ?: 0f
         val tare = bowl?.tareWeight ?: 0f
         ConsumptionDialog(
             title = "喝喝",
             bowl = bowl,
+            logs = logs,
             lastGrossWeight = if (lastGross > 0f) lastGross else tare,
+            lastRecordTime = lastLog?.timestamp,
             initialDate = additionInitialDate,
             onConfirm = { gross, isFromEmpty, date -> viewModel.recordConsumption(gross, BowlType.WATER, isFromEmpty, null, date) },
             onUpdateTare = { newTare -> viewModel.updateBowl(bowl?.name ?: "水盆", newTare, BowlType.WATER, bowl?.id) },
@@ -930,7 +936,7 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
                 ConsumptionType.EAT -> Triple("吃吃", R.drawable.ic_food, FoodColor)
                 ConsumptionType.CLEAR -> Triple("清空碗", R.drawable.ic_food, DeepGreen)
             }
-            list.add(RecordItem(it.timestamp, typeStr, "${if(it.amount > 0) "+" else ""}${"%.1f".format(it.amount)}g", resId, color, it))
+            list.add(RecordItem(it.timestamp, typeStr, "${if(it.amount > 0) "+" else ""}${"%.1f".format(it.amount)}g", resId, color, it, subtitle = it.changeDetail))
         }
         waterLogs.filter { isSameDay(it.timestamp, date) }.forEach {
             val (typeStr, resId, color) = when(it.type) {
@@ -938,7 +944,7 @@ fun DayDetailView(viewModel: PetViewModel, date: Calendar) {
                 ConsumptionType.EAT -> Triple("喝喝", R.drawable.ic_water, WaterColor)
                 ConsumptionType.CLEAR -> Triple("清空碗", R.drawable.ic_water, DeepGreen)
             }
-            list.add(RecordItem(it.timestamp, typeStr, "${if(it.amount > 0) "+" else ""}${"%.1f".format(it.amount)}ml", resId, color, it))
+            list.add(RecordItem(it.timestamp, typeStr, "${if(it.amount > 0) "+" else ""}${"%.1f".format(it.amount)}ml", resId, color, it, subtitle = it.changeDetail))
         }
         weightLogs.filter { isSameDay(it.timestamp, date) }.forEach {
             list.add(RecordItem(it.timestamp, "体重记录", "${it.weight}kg", R.drawable.ic_weight, MediumGreen, it))
@@ -1093,6 +1099,16 @@ fun RecordRow(record: RecordItem, onClick: () -> Unit) {
                 fontWeight = FontWeight.Medium,
                 color = Color.DarkGray
             )
+            if (!record.subtitle.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = record.subtitle, 
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 10.sp,
+                    color = Color.Gray,
+                    lineHeight = 13.sp
+                )
+            }
         }
         Text(
             text = record.value, 
@@ -1584,7 +1600,17 @@ fun EditRecordDialog(record: RecordItem, onConfirm: (Any) -> Unit, onDismiss: ()
 }
 
 @Composable
-fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean, Calendar) -> Unit, onUpdateTare: (Float) -> Unit, onDismiss: () -> Unit, lastGrossWeight: Float, initialDate: Calendar) {
+fun ConsumptionDialog(
+    title: String,
+    bowl: Bowl?,
+    onConfirm: (Float, Boolean, Calendar) -> Unit,
+    onUpdateTare: (Float) -> Unit,
+    onDismiss: () -> Unit,
+    logs: List<ConsumptionLog> = emptyList(),
+    lastGrossWeight: Float = 0f,
+    lastRecordTime: Long? = null,
+    initialDate: Calendar
+) {
     var grossInput by remember { mutableStateOf("") }
     var showTareEdit by remember { mutableStateOf(false) }
     var mode by remember { mutableIntStateOf(0) } 
@@ -1606,12 +1632,30 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean, Ca
     val currentTare = bowl?.tareWeight ?: 0f
     var errorText by remember { mutableStateOf<String?>(null) }
     
-    val diffAmount = remember(grossInput, mode) {
+    // 优先基于 selectedDateTime 计算对应的最近历史基准记录
+    val relevantLog = remember(selectedDateTime, logs) {
+        if (logs.isNotEmpty()) {
+            logs.filter { it.timestamp <= selectedDateTime.timeInMillis }
+                .maxByOrNull { it.timestamp } ?: logs.firstOrNull()
+        } else null
+    }
+    val baselineGross = remember(relevantLog, lastGrossWeight, currentTare) {
+        if (relevantLog != null) {
+            if (relevantLog.grossWeight > 0f) relevantLog.grossWeight else currentTare
+        } else {
+            if (lastGrossWeight > 0f) lastGrossWeight else currentTare
+        }
+    }
+    val baselineTime = remember(relevantLog, lastRecordTime) {
+        relevantLog?.timestamp ?: lastRecordTime
+    }
+
+    val diffAmount = remember(grossInput, mode, baselineGross, currentTare) {
         val input = grossInput.toFloatOrNull() ?: return@remember null
         if (mode == 1) {
             input - currentTare
         } else {
-            input - lastGrossWeight
+            input - baselineGross
         }
     }
 
@@ -1672,7 +1716,22 @@ fun ConsumptionDialog(title: String, bowl: Bowl?, onConfirm: (Float, Boolean, Ca
                                 }
                             }
                             Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = if (mode == 1) "基准: 碗重(${currentTare}g)" else "基准: 上次总重(${"%.1f".format(lastGrossWeight)}g)", fontSize = 11.sp, color = Color.Gray)
+                                val lastTimeStr = remember(baselineTime) {
+                                    if (baselineTime != null && baselineTime > 0) {
+                                        SimpleDateFormat("MM/dd HH:mm", Locale.CHINA).format(Date(baselineTime))
+                                    } else null
+                                }
+                                val grossStr = if (baselineGross % 1 == 0f) "${baselineGross.toInt()}" else "%.1f".format(baselineGross)
+                                val baselineText = if (mode == 1) {
+                                    "基准: 碗重(${currentTare}g)"
+                                } else {
+                                    if (lastTimeStr != null) {
+                                        "基准: 上次总重(${grossStr}g $lastTimeStr)"
+                                    } else {
+                                        "基准: 上次总重(${grossStr}g)"
+                                    }
+                                }
+                                Text(text = baselineText, fontSize = 11.sp, color = Color.Gray)
                                 if (diffAmount != null && diffAmount != 0f) {
                                     Text(
                                         text = if (diffAmount > 0) "增加: +${"%.1f".format(diffAmount)}g" else "减少: ${"%.1f".format(diffAmount)}g",
@@ -2971,6 +3030,6 @@ fun calculateAge(birthdayStr: String?, currentDate: Calendar): Int {
     }
 }
 
-data class RecordItem(val timestamp: Long, val title: String, val value: String, val resId: Int, val color: Color, val rawData: Any)
+data class RecordItem(val timestamp: Long, val title: String, val value: String, val resId: Int, val color: Color, val rawData: Any, val subtitle: String? = null)
 fun isSameDay(cal1: Calendar, cal2: Calendar): Boolean = cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) && cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
 fun isSameDay(millis: Long, cal: Calendar): Boolean = isSameDay(Calendar.getInstance().apply { timeInMillis = millis }, cal)

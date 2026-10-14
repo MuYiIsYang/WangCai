@@ -82,7 +82,8 @@ data class ConsumptionLog(
     @SerialName("吃喝方式") val method: String = "",   
     @Transient val type: ConsumptionType = ConsumptionType.ADD,
     @Transient val bowlType: BowlType = BowlType.FOOD,
-    @Transient val isSynced: Boolean = false
+    @Transient val isSynced: Boolean = false,
+    @Transient val changeDetail: String? = null
 )
 
 @Serializable

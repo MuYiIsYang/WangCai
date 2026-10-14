@@ -14,6 +14,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.ai.wangcai.util.TranslationHelper
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.text.SimpleDateFormat
 import kotlinx.serialization.json.*
 
 class PetViewModel(application: Application) : AndroidViewModel(application) {
@@ -408,15 +411,31 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 
                 // 获取最新日志计算差值
-                val logs = if (type == BowlType.FOOD) dao.getConsumptionLogs(BowlType.FOOD).first() else dao.getConsumptionLogs(BowlType.WATER).first()
-                val lastLog = logs.firstOrNull()
-                val lastGross = if ((lastLog?.grossWeight ?: 0f) > 0f) lastLog!!.grossWeight else tare
                 val ts = generateTimestamp(targetDate)
-                val diff = if (isFromEmpty) grossWeight - tare else grossWeight - lastGross
+                val logs = if (type == BowlType.FOOD) dao.getConsumptionLogs(BowlType.FOOD).first() else dao.getConsumptionLogs(BowlType.WATER).first()
+                // 优先查找时间戳早于等于当前记录时间的最近一条记录作为基准，若无则取第一条
+                val priorLog = logs.filter { it.timestamp <= ts }.maxByOrNull { it.timestamp } ?: logs.firstOrNull()
+                val lastGross = if ((priorLog?.grossWeight ?: 0f) > 0f) priorLog!!.grossWeight else tare
+                val baseGross = if (isFromEmpty) tare else lastGross
+                val diff = grossWeight - baseGross
                 val roundedAmount = kotlin.math.round(diff * 10f) / 10f
                 val roundedGross = kotlin.math.round(grossWeight * 10f) / 10f
                 
                 if (roundedAmount != 0f) {
+                    val unit = if (type == BowlType.FOOD) "g" else "ml"
+                    val baseStr = if (baseGross % 1 == 0f) "${baseGross.toInt()}" else "%.1f".format(baseGross)
+                    val newStr = if (roundedGross % 1 == 0f) "${roundedGross.toInt()}" else "%.1f".format(roundedGross)
+                    val absDiff = kotlin.math.abs(roundedAmount)
+                    val diffStr = if (absDiff % 1 == 0f) "${absDiff.toInt()}" else "%.1f".format(absDiff)
+                    
+                    val changeStr = if (roundedAmount > 0) {
+                        "$baseStr->$newStr  +$diffStr$unit"
+                    } else {
+                        "$baseStr->$newStr  减少$diffStr$unit"
+                    }
+                    val actualDateStr = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.CHINA).format(Date())
+                    val detail = "$changeStr\n实际添加: $actualDateStr"
+
                     val log = ConsumptionLog(
                         timestamp = ts, 
                         amount = roundedAmount, 
@@ -425,7 +444,8 @@ class PetViewModel(application: Application) : AndroidViewModel(application) {
                         bowlType = type, 
                         action = if (roundedAmount > 0) "增加" else "减少", 
                         method = if (roundedAmount > 0) (if(type==BowlType.FOOD) "添加饮食" else "添加饮水") else (if(type==BowlType.FOOD) "吃吃" else "喝喝"), 
-                        isSynced = false
+                        isSynced = false,
+                        changeDetail = detail
                     )
                     handleSyncDecision("饮食饮水记录", "ADD", log)
                 }

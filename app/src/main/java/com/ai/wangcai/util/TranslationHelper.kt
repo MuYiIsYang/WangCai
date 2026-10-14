@@ -38,6 +38,7 @@ object TranslationHelper {
         "recordTime" to "记录时间",
         "amount" to "喂食数量",
         "grossWeight" to "上次总重",
+        "changeDetail" to "数据变化",
         "action" to "动作",
         "method" to "吃喝方式",
         "bowlType" to "食具类型",
